@@ -10,10 +10,16 @@ void main() {
     final cap = ByteWriter()
       ..u32(6)
       ..boolean(true)
-      ..string('file-root');
+      ..string('file-root')
+      ..boolean(true)
+      ..boolean(false)
+      ..boolean(false);
     final capMessage = decodeServerMessage(cap.toBytes()) as FileCapabilitiesReceived;
     expect(capMessage.enabled, true);
     expect(capMessage.rootLabel, 'file-root');
+    expect(capMessage.read, true);
+    expect(capMessage.write, false);
+    expect(capMessage.delete, false);
 
     final listing = ByteWriter()
       ..u32(7)
@@ -85,23 +91,35 @@ void main() {
   test('decodes Welcome exactly as the Rust Host encodes it', () {
     final writer = ByteWriter()
       ..u32(0)
-      ..u16(1)
+      ..u16(2)
       ..string('host-1')
       ..string('测试主机')
       ..u32(3200)
       ..u32(2000)
       ..boolean(true)
       ..string('tiles')
-      ..u32(128);
+      ..u32(128)
+      ..boolean(true)
+      ..string('alice')
+      ..u32(permissionView | permissionControl)
+      ..string('ticket')
+      ..string('session-1')
+      ..u64(1700003600);
     final message = decodeServerMessage(writer.toBytes());
     expect(message, isA<WelcomeReceived>());
     final welcome = (message as WelcomeReceived).welcome;
-    expect(welcome.protocolVersion, 1);
+    expect(welcome.protocolVersion, 2);
     expect(welcome.hostName, '测试主机');
     expect(welcome.screenWidth, 3200);
     expect(welcome.screenHeight, 2000);
     expect(welcome.inputAllowed, true);
     expect(welcome.tileSize, 128);
+    expect(welcome.authenticated, true);
+    expect(welcome.account, 'alice');
+    expect(welcome.permissions, permissionView | permissionControl);
+    expect(welcome.authMode, 'ticket');
+    expect(welcome.sessionId, 'session-1');
+    expect(welcome.ticketExpiresAt, 1700003600);
   });
 
   test('decodes a frame with tiles', () {
@@ -145,11 +163,39 @@ void main() {
       encodeHello(clientName: 'viewer', clientId: 'id', requestInput: true),
     );
     expect(hello.u32(), 0);
-    expect(hello.u16(), 1);
+    expect(hello.u16(), 2);
     expect(hello.string(), 'viewer');
     expect(hello.string(), 'id');
     expect(hello.boolean(), true);
+    expect(
+      hello.u32(),
+      featureFileTransfer | featureTextInput | featureSessionTicket,
+    );
+    expect(hello.boolean(), false);
+    expect(hello.string(), '');
     expect(hello.remaining, 0);
+
+    final nonce = 'ab' * 32;
+    final ticketed = ByteReader(
+      encodeHello(
+        clientName: 'viewer',
+        clientId: 'id',
+        requestInput: true,
+        sessionTicket: 'yl1.payload.signature',
+        sessionNonce: nonce,
+      ),
+    );
+    expect(ticketed.u32(), 0);
+    expect(ticketed.u16(), 2);
+    ticketed
+      ..string()
+      ..string()
+      ..boolean();
+    ticketed.u32();
+    expect(ticketed.boolean(), true);
+    expect(ticketed.string(), 'yl1.payload.signature');
+    expect(ticketed.string(), nonce);
+    expect(ticketed.remaining, 0);
 
     final move = ByteReader(encodeMouseMove(10, 20));
     expect(move.u32(), 1);

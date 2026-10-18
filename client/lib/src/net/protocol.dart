@@ -2,10 +2,31 @@ import 'dart:typed_data';
 
 import 'bincode.dart';
 
-const int protocolVersion = 1;
+const int protocolVersion = 2;
 const int defaultPort = 24800;
 const String tlsServerName = 'yuanlian.local';
 const int maxMessageBytes = 32 * 1024 * 1024;
+
+const int featureFileTransfer = 1 << 0;
+const int featureTextInput = 1 << 1;
+const int featureSessionTicket = 1 << 2;
+
+const int permissionView = 1 << 0;
+const int permissionControl = 1 << 1;
+const int permissionFileRead = 1 << 2;
+const int permissionFileWrite = 1 << 3;
+const int permissionFileDelete = 1 << 4;
+
+String permissionSummary(int bits) {
+  final names = <String>[
+    if (bits & permissionView != 0) '查看',
+    if (bits & permissionControl != 0) '控制',
+    if (bits & permissionFileRead != 0) '读取文件',
+    if (bits & permissionFileWrite != 0) '写入文件',
+    if (bits & permissionFileDelete != 0) '删除文件',
+  ];
+  return names.isEmpty ? '无权限' : names.join('、');
+}
 
 // ServerMessage enum indices (Rust declaration order).
 const int _serverWelcome = 0;
@@ -54,6 +75,12 @@ class WelcomeMessage {
     required this.inputAllowed,
     required this.mode,
     required this.tileSize,
+    required this.authenticated,
+    required this.account,
+    required this.permissions,
+    required this.authMode,
+    required this.sessionId,
+    required this.ticketExpiresAt,
   });
 
   final int protocolVersion;
@@ -64,6 +91,12 @@ class WelcomeMessage {
   final bool inputAllowed;
   final String mode;
   final int tileSize;
+  final bool authenticated;
+  final String account;
+  final int permissions;
+  final String authMode;
+  final String sessionId;
+  final int ticketExpiresAt;
 }
 
 class TileData {
@@ -116,7 +149,12 @@ enum ErrorCode {
   inputDenied('input_denied'),
   screenUnavailable('screen_unavailable'),
   internal('internal'),
-  busy('busy');
+  busy('busy'),
+  unauthorized('unauthorized'),
+  ticketExpired('ticket_expired'),
+  ticketReplay('ticket_replay'),
+  permissionDenied('permission_denied'),
+  revoked('revoked');
 
   const ErrorCode(this.wireName);
   final String wireName;
@@ -181,9 +219,18 @@ final class ByeReceived extends ServerMessage {
 }
 
 final class FileCapabilitiesReceived extends ServerMessage {
-  const FileCapabilitiesReceived(this.enabled, this.rootLabel);
+  const FileCapabilitiesReceived(
+    this.enabled,
+    this.rootLabel, {
+    this.read = false,
+    this.write = false,
+    this.delete = false,
+  });
   final bool enabled;
   final String rootLabel;
+  final bool read;
+  final bool write;
+  final bool delete;
 }
 
 final class DirListingReceived extends ServerMessage {
@@ -234,6 +281,9 @@ ServerMessage decodeServerMessage(Uint8List payload) {
     _serverFileCapabilities => FileCapabilitiesReceived(
         reader.boolean(),
         reader.string(),
+        read: reader.boolean(),
+        write: reader.boolean(),
+        delete: reader.boolean(),
       ),
     _serverDirListing => _decodeDirListing(reader),
     _serverFileChunk => FileChunkReceived(
@@ -270,6 +320,12 @@ WelcomeReceived _decodeWelcome(ByteReader reader) {
       inputAllowed: reader.boolean(),
       mode: reader.string(),
       tileSize: reader.u32(),
+      authenticated: reader.boolean(),
+      account: reader.string(),
+      permissions: reader.u32(),
+      authMode: reader.string(),
+      sessionId: reader.string(),
+      ticketExpiresAt: reader.u64(),
     ),
   );
 }
@@ -292,7 +348,7 @@ FrameReceived _decodeFrame(ByteReader reader) {
         y: reader.u32(),
         width: reader.u32(),
         height: reader.u32(),
-        jpeg: reader.bytes(),
+        jpeg: reader.bytes(maxBytes: 4 * 1024 * 1024),
       ),
     );
   }
@@ -347,13 +403,25 @@ Uint8List encodeHello({
   required String clientName,
   required String clientId,
   required bool requestInput,
+  int features = featureFileTransfer | featureTextInput | featureSessionTicket,
+  String? sessionTicket,
+  String sessionNonce = '',
 }) {
   final writer = ByteWriter()
     ..u32(_clientHello)
     ..u16(protocolVersion)
     ..string(clientName)
     ..string(clientId)
-    ..boolean(requestInput);
+    ..boolean(requestInput)
+    ..u32(features);
+  if (sessionTicket == null) {
+    writer.boolean(false);
+  } else {
+    writer
+      ..boolean(true)
+      ..string(sessionTicket);
+  }
+  writer.string(sessionNonce);
   return writer.toBytes();
 }
 

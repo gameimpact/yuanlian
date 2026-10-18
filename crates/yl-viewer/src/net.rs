@@ -41,10 +41,16 @@ pub struct NetHandle {
 
 /// Starts the network thread. It performs the TLS handshake and waits for the
 /// Welcome message before any frames are forwarded.
+pub struct SessionAuth {
+    pub ticket: Option<String>,
+    pub nonce: String,
+}
+
 pub fn spawn_connection(
     address: String,
     fingerprint: [u8; 32],
     client_name: String,
+    auth: SessionAuth,
 ) -> Result<(Receiver<NetEvent>, NetHandle)> {
     let (event_tx, event_rx) = std::sync::mpsc::channel();
     let (outbound, outbound_rx) = mpsc::unbounded_channel();
@@ -68,6 +74,7 @@ pub fn spawn_connection(
                 address,
                 fingerprint,
                 client_name,
+                auth,
                 event_tx.clone(),
                 outbound_rx,
                 ping_tx,
@@ -89,6 +96,7 @@ async fn net_main(
     address: String,
     fingerprint: [u8; 32],
     client_name: String,
+    auth: SessionAuth,
     events: Sender<NetEvent>,
     outbound_rx: mpsc::UnboundedReceiver<ClientMessage>,
     ping_tx: mpsc::UnboundedSender<ClientMessage>,
@@ -123,6 +131,13 @@ async fn net_main(
             std::process::id()
         ),
         request_input: true,
+        features: if auth.ticket.is_some() {
+            yl_proto::FEATURE_SESSION_TICKET
+        } else {
+            0
+        },
+        session_ticket: auth.ticket,
+        session_nonce: auth.nonce,
     });
     write_message(&mut writer, &hello).await?;
 

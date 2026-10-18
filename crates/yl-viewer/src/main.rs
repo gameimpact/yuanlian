@@ -35,6 +35,14 @@ struct Args {
     /// 测试专用：即使 Host 未授权也继续发送输入，用于验证 Host 侧强制拒绝。
     #[arg(long, hide = true)]
     force_input: bool,
+
+    /// 控制服务端签发的短时会话票据（诊断/自动化测试）。
+    #[arg(long)]
+    ticket: Option<String>,
+
+    /// 与票据绑定的 64 位十六进制连接随机数。
+    #[arg(long, default_value = "")]
+    nonce: String,
 }
 
 fn main() -> Result<()> {
@@ -51,23 +59,35 @@ fn main() -> Result<()> {
 
     let args = Args::parse();
     let fingerprint = parse_fingerprint(&args.fingerprint).context("invalid --fingerprint")?;
-    let (events, handle) =
-        net::spawn_connection(args.connect.clone(), fingerprint, args.name.clone())?;
+    let (events, handle) = net::spawn_connection(
+        args.connect.clone(),
+        fingerprint,
+        args.name.clone(),
+        net::SessionAuth {
+            ticket: args.ticket.clone(),
+            nonce: args.nonce.clone(),
+        },
+    )?;
     let welcome = match wait_for_welcome(&events, Duration::from_secs(15)) {
         Ok(welcome) => welcome,
         Err(error) => bail!("{error:#}"),
     };
     println!(
-        "已连接 {}（Host ID {}），屏幕 {}x{}，模式 {}，输入：{}",
+        "已连接 {}（Host ID {}），屏幕 {}x{}，模式 {}，授权：{}，输入：{}",
         welcome.host_name,
         welcome.host_id,
         welcome.screen_width,
         welcome.screen_height,
         welcome.mode,
+        if welcome.authenticated {
+            format!("账号 {} / {}", welcome.account, welcome.auth_mode)
+        } else {
+            format!("匿名开发模式 / {}", welcome.auth_mode)
+        },
         if welcome.input_allowed {
             "允许"
         } else {
-            "仅查看（Host 未启用 --allow-input）"
+            "仅查看（权限或 Host 策略未允许输入）"
         }
     );
 

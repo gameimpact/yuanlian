@@ -13,7 +13,9 @@
 
 ## 当前里程碑
 
-**M0（Windows 引擎垂直切片）已完成并实机验证（2026-10-18）**：真实采集、图块差分/精修、TLS 指纹固定、SendInput、原生查看器。证据见 `docs/evidence/m0-results.md`。下一阶段 M1 是 Flutter 产品 UI + Rust FFI/纹理桥 + 账号/配对/文件基础，见 `docs/roadmap.md`。M0 不是完整产品，不要扩大宣称。
+**M0（Windows 引擎垂直切片）已完成并实机验证（2026-10-18）**：真实采集、图块差分/精修、TLS 指纹固定、SendInput、原生查看器。证据见 `docs/evidence/m0-results.md`。
+
+**阶段 B（账号/设备/配对/短时票据/Host 授权闭环）已完成代码与自动化/本机 E2E（2026-10-18，0.2.0，协议 v2）**：持久设备身份、Ed25519 票据、Host 离线验签/防重放/本机确认、读写权限交集、中心撤权（实测 0.86–1.17 秒）、Flutter 账号/设备/配对 UI。证据见 `docs/evidence/b-auth-ticket-2026-10-18.md`。M1 的 Rust FFI/native texture、Linux/Android Host 与三模式仍未完成；M0/B 都不是完整产品，不要扩大宣称。
 
 ## 平台 UI 约定（M3）
 
@@ -28,28 +30,45 @@
 - 代码在 `server/`，是独立 Cargo 项目（根 workspace 已 exclude）；在 WSL Ubuntu 24.04 构建 Linux 二进制，再上传到内网服务器，**不要在服务器安装 Rust/大型依赖**（根分区只剩约 540 MB）。
 - 服务器 `192.168.9.66` 上只允许操作 `/opt/yuanlian` 和 `yuanlian-server.service`；服务只监听 `127.0.0.1:18080`。**禁止触碰 ikev2/charon（UDP 500/4500）、nginx、Docker、Postgres/Redis/Casdoor、防火墙**。
 - 不要在没有 TLS 反向代理时绑定 `0.0.0.0` 或暴露外网；管理员密码不得写入仓库、脚本、日志或文档，只能私下交付。
-- 构建：`cd server && cargo fmt && cargo clippy --release -- -D warnings && cargo test --release && cargo build --release`（在 WSL 执行）；部署单元模板在 `server/deploy/`。
-- 当前 API/后台已实测；Flutter 登录/设备目录/配对 UI 尚未接入，Host 尚未校验服务端票据。
+- 构建：`cd server && cargo fmt -- --check && cargo clippy --release --locked -- -D warnings && cargo test --release --locked && cargo build --release --locked`（在 WSL 执行，`CARGO_TARGET_DIR` 建议放 WSL 文件系统）；部署单元模板在 `server/deploy/`。
+- 服务端已提供票据公钥 `/api/v1/server/ticket-key`、`/devices/{id}/session-ticket`、活动会话上报/列表/撤销；Host 已实装离线验签、防重放、权限交集与心跳撤权。Flutter 账号/设备/配对 UI 已接入，但未做真实点击登录 E2E；Host 本地授权为 Windows MessageBox，Session 0 服务不可用。
+- 票据私钥存在服务端 SQLite `ticket_keys` 表，不写入日志/仓库；轮换用 `YUANLIAN_ROTATE_TICKET_KEY=1` 启动一次。立即吊销已签发票据走中心撤权，不要等待过期。
+- WebUI 管理页使用真实 API/受控轮询；在线只由设备令牌 agent 心跳证明。P2P/ICE/STUN/TURN/中继仍未实现，网络页必须显示真实未实现状态，不能加假测试按钮。
 
 ## 工具链（本机）
 
 - Rust：`C:\Users\Lenovo\.cargo\bin\cargo.exe`（1.99+, x86_64-pc-windows-msvc）
-- Flutter：`C:\Users\Lenovo\dev\flutter\bin\flutter.bat`（3.47.7 stable，已解压；产品工程尚未创建）
+- Flutter：`C:\Users\Lenovo\dev\flutter\bin\flutter.bat`（3.47.7 stable；产品工程在 `client/`）
+- Windows 构建需 `FLUTTER_CMAKE_PATH=C:\Users\Lenovo\dev\cmake\cmake-4.4.4-windows-x86_64\bin\cmake.exe`（本机 VS 未装 CMake 组件）；中文路径会使 Windows AOT/MSBuild 失败，发布构建在 ASCII 副本 `C:\Users\Lenovo\dev\yuanlian-client-build` 生成，源码仍以仓库为准。
+- Android release 签名通过仓库外 `YUANLIAN_KEY_PROPERTIES` 指向 key.properties；密钥/密码不得进仓库、日志或文档。当前产物为**预览签名**。
 - VS2022 Build Tools + Windows SDK 10.0.26100；Node 24；Android SDK 在 `%LOCALAPPDATA%\Android\Sdk`
-- 磁盘紧张，避免无谓的全量重建；不要提交 `target/`、Flutter 缓存、`artifacts/` 或大文件。
+- 磁盘紧张，避免无谓的全量重建；不要提交 `target/`、Flutter 缓存、`artifacts/`、`dist/` 或密钥。
 
 ## 构建与测试
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets
-cargo test --workspace
-cargo build --release -p yl-host -p yl-viewer
+cargo clippy --workspace --all-targets --locked
+cargo test --workspace --locked
+cargo build --release --locked -p yl-host -p yl-viewer
 target/release/yl-host --capture-test out.jpg
 target/release/yl-host --test-input          # 移动鼠标到屏幕中心、校验、复位
+target/release/yl-host --print-identity      # 稳定设备 ID / TLS 指纹
+
+cd client
+dart analyze lib test
+flutter test --no-pub
+FLUTTER_CMAKE_PATH=... flutter build windows --release --no-pub
+
+# 独立服务端（WSL Ubuntu；不能以根 workspace 测试代替）
+cd server
+cargo fmt -- --check
+cargo clippy --release --locked -- -D warnings
+cargo test --release --locked
+cargo build --release --locked
 ```
 
-实机验证查看器时，用 PowerShell 截屏确认窗口非空白；不要只凭进程存活判断成功。查看器→Host 鼠标链路可用 `scripts/test-viewer-mouse.ps1`（DPI 感知；先启动 Host `--allow-input` 与查看器并确认窗口存在）。同机键盘会产生输入回环，禁止用同机查看器做按键 E2E。
+实机验证查看器时，用 PowerShell 截屏确认窗口非空白；不要只凭进程存活判断成功。查看器→Host 鼠标链路可用 `scripts/test-viewer-mouse.ps1`（DPI 感知；先启动 Host `--allow-input` 与查看器并确认窗口存在）。同机键盘会产生输入回环，禁止用同机查看器做按键 E2E。票据 E2E 使用 `yl-viewer --ticket <ticket> --nonce <nonce>`；验证撤权要记录 API 时间与 Host 日志时间差，目标 ≤2 秒。
 
 ## 代码约定
 
@@ -60,16 +79,17 @@ target/release/yl-host --test-input          # 移动鼠标到屏幕中心、校
 - 关键路径写单元测试：图块差分/缓存、协议编解码、权限与路径校验。
 - 中文文档；代码标识符用英文；注释解释约束，不写“这行做了什么”。
 
-## M0 已知边界
+## 当前已知边界
 
-- 仅 Windows Host + Windows 原生查看器；单显示器、单查看者；Host 顺序处理会话（第二个连接要等前一个结束）。
-- TLS 自签名 + 每次启动重新生成 + 指纹人工核对；无账号/配对/按会话权限。
-- 画面走 TCP，存在队头阻塞；输入与画面共用连接。
-- 采集后端为 XCap（Windows GDI 路径）；3200×2000 实测约 9 fps、采集约 53 ms/帧、编码约 30 ms/帧。后续替换/补充 DXGI Desktop Duplication 或 Windows Graphics Capture。
+- Windows Host + Windows/Android 主控；单显示器、单会话；Host 顺序处理连接。
+- Host TLS 身份持久化；无票据连接默认拒绝，只有显式 `--allow-anonymous` 才进入匿名开发模式。自签名指纹仍需首次人工核对。
+- 画面走 TCP，存在队头阻塞；输入/画面/文件共用连接。
+- 采集后端为 XCap（Windows GDI）；3200×2000 本轮约 7–9 fps、采集约 51–55 ms/帧、编码约 24–33 ms/帧；不是完整会话性能验收。
 - 图块精修是 JPEG 85→95，不是无损；无滚动复用、块版本/TTL、无损文字。
 - Host 与查看器均为 Per-Monitor-V2；混合 DPI 未实测。
-- 键盘映射仅虚拟键码；中文 IME/Unicode 未实现；同机键盘 E2E 会回环。
-- `--force-input` 是隐藏测试开关，仅用于验证 Host 侧拒绝，不得作为产品功能。
-- 质量模式（Moonlight/Sunshine）、完整兼顾/流畅参数、服务端、完整文件专项、Linux/Android 均未实现。
-- 文件传输：Host 用 `--file-root` 显式授权单目录；Flutter 文件页支持单文件双向校验。无目录传输、拖放、续传、ACL/审计；Windows 覆盖使用 MoveFileExW，故障注入未实测。
-- Android：查看/缩放菜单/拖动平移/双指捏合代码；捏合未实机手势验证，IME/SAF 未实现；无 Android Host。Windows Mica 仅请求真实 DWM，Flutter 不透明表面下不能宣称整窗材质。
+- 键盘映射为虚拟键码；Unicode/中文通过 `TextInput` 注入，不是远端 IME；同机键盘 E2E 会回环。
+- 票据默认 1 小时；Host 心跳每 1 秒，控制面断联 30 秒后租约失效并结束票据会话。服务端票据私钥在 SQLite，未做 HSM/加密存储。
+- 本机授权是 MessageBox；无托盘/服务安装/无人值守；Session 0 服务不能显示桌面对话框，必须拒绝而非绕过。
+- 质量模式（Moonlight/Sunshine）、完整兼顾/流畅参数、中继、E2EE、Linux 客户端/Host、Android Host、完整文件专项均未实现。
+- 文件传输：Host 用 `--file-root` 显式授权单目录；Flutter 支持单文件双向校验、无覆盖原子提交、下载取消、读/写权限；无目录/拖放/续传/SAF/ACL/删除；故障注入仅覆盖单元测试场景。
+- Android：release APK 为独立预览签名；捏合/IME/SAF/实体触控未验收；无 Android Host。Windows Mica 仅请求真实 DWM，Flutter 不透明表面下不能宣称整窗材质。

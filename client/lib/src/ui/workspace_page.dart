@@ -3,14 +3,17 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/profile.dart';
+import '../net/frame_queue.dart';
 import '../net/protocol.dart';
 import '../net/remote_client.dart';
 import '../platform/keymap.dart';
+import 'design_tokens.dart';
 import 'file_browser_page.dart';
 import 'widgets.dart';
 
@@ -29,10 +32,10 @@ class WorkspacePage extends StatefulWidget {
   final bool autoOpenFiles;
 
   @override
-  State<WorkspacePage> createState() => _WorkspacePageState();
+  State<WorkspacePage> createState() => WorkspacePageState();
 }
 
-class _WorkspacePageState extends State<WorkspacePage>
+class WorkspacePageState extends State<WorkspacePage>
     with WidgetsBindingObserver {
   final Map<(int, int), ui.Image> _tiles = <(int, int), ui.Image>{};
   final FocusNode _focusNode = FocusNode(debugLabel: 'remote-workspace');
@@ -42,13 +45,18 @@ class _WorkspacePageState extends State<WorkspacePage>
   int _remoteWidth = 0;
   int _remoteHeight = 0;
   int _generation = -1;
-  int _lastSeq = -1;
+  int _lastAppliedSeq = -1;
+  int _cachePixels = 0;
   bool _waitingFirstFrame = true;
   bool _hasFocus = true;
   bool _disposed = false;
   String? _disconnectReason;
+  String? _frameFault;
   CursorMessage? _cursor;
-  Future<void> _decodeChain = Future<void>.value();
+  final FrameQueue _frameQueue = FrameQueue();
+  bool _decoding = false;
+  DateTime _lastKeyframeRequest = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastFrameFaultToast = DateTime.fromMillisecondsSinceEpoch(0);
   _Viewport _viewport = const _Viewport(Rect.zero, 1);
   int _buttonsMask = 0;
   bool _pointerInsideImage = false;
@@ -79,6 +87,26 @@ class _WorkspacePageState extends State<WorkspacePage>
   double _mibps = 0;
 
   RemoteClient get _client => widget.client;
+
+  /// Test-only entry point for the same validation path used by the socket.
+  /// It does not bypass limits or inject fake product data.
+  @visibleForTesting
+  void debugHandleFrame(FrameMessage frame) => _onFrame(frame);
+
+  @visibleForTesting
+  bool get debugWaitingFirstFrame => _waitingFirstFrame;
+
+  @visibleForTesting
+  int get debugTileCount => _tiles.length;
+
+  @visibleForTesting
+  int get debugCachedPixels => _cachePixels;
+
+  @visibleForTesting
+  int get debugPendingFrames => _frameQueue.length;
+
+  @visibleForTesting
+  String? get debugFrameFault => _frameFault;
 
   @override
   void initState() {
@@ -148,7 +176,7 @@ class _WorkspacePageState extends State<WorkspacePage>
           setState(() => _lifecycleSuspended = true);
         }
       case AppLifecycleState.resumed:
-        if (!Platform.isAndroid && mounted) {
+        if (defaultTargetPlatform != TargetPlatform.android && mounted) {
           setState(() => _lifecycleSuspended = false);
         } else if (mounted) {
           setState(() => _lifecycleSuspended = true);
@@ -320,10 +348,12 @@ class _WorkspacePageState extends State<WorkspacePage>
     _statsTimer?.cancel();
     _events.cancel();
     _focusNode.dispose();
+    _frameQueue.clear();
     for (final image in _tiles.values) {
       image.dispose();
     }
     _tiles.clear();
+    _cachePixels = 0;
     _releaseAllInput();
     _client.disconnect();
     _client.dispose();
@@ -336,11 +366,7 @@ class _WorkspacePageState extends State<WorkspacePage>
     }
     switch (event) {
       case FrameEvent(:final frame):
-        _decodeChain = _decodeChain
-            .then((_) => _applyFrame(frame))
-            .catchError((Object error, StackTrace stack) {
-              debugPrint('frame apply failed: $error\n$stack');
-            });
+        _onFrame(frame);
       case CursorEvent(:final cursor):
         if (_cursor?.x != cursor.x ||
             _cursor?.y != cursor.y ||
@@ -367,6 +393,7 @@ class _WorkspacePageState extends State<WorkspacePage>
         }
       case DisconnectedEvent(:final reason):
         _buttonsMask = 0;
+        _frameQueue.clear(requireFull: true);
         if (mounted) {
           setState(() => _disconnectReason = reason);
         }
@@ -375,84 +402,208 @@ class _WorkspacePageState extends State<WorkspacePage>
     }
   }
 
-  Future<void> _applyFrame(FrameMessage frame) async {
+  void _onFrame(FrameMessage frame) {
     if (_disposed || !mounted) {
       return;
     }
-    if (frame.width == 0 ||
-        frame.height == 0 ||
-        frame.width > 16384 ||
-        frame.height > 16384 ||
-        frame.width * frame.height > 64_000_000) {
-      debugPrint('ignoring frame with invalid geometry ${frame.width}x${frame.height}');
+    final validation = validateFrame(frame);
+    if (!validation.isValid) {
+      _frameFault = validation.error;
+      _frameQueue.needsFull = true;
+      _requestFullFrame();
       return;
     }
-    if (frame.seq <= _lastSeq && !frame.full) {
+    final queued = _frameQueue.offer(
+      frame,
+      validation,
+      currentGeneration: _generation,
+    );
+    if (!queued) {
+      if (_frameQueue.needsFull) {
+        _requestFullFrame();
+      }
       return;
     }
-    _lastSeq = frame.seq;
+    if (!_decoding) {
+      unawaited(_drainFrames());
+    }
+  }
 
-    final reset = frame.full ||
-        frame.generation != _generation ||
-        frame.width != _remoteWidth ||
-        frame.height != _remoteHeight;
-    if (reset) {
+  /// Requests a new full frame at most once every two seconds. The queue stays
+  /// in "needs full" mode until a validated full frame has been applied, so
+  /// incremental frames cannot paper over a corrupt or missing baseline.
+  void _requestFullFrame() {
+    _frameQueue.needsFull = true;
+    if (mounted) {
+      setState(() {});
+    }
+    final now = DateTime.now();
+    if (now.difference(_lastKeyframeRequest) < const Duration(seconds: 2)) {
+      return;
+    }
+    _lastKeyframeRequest = now;
+    _client.requestKeyframe();
+    if (_frameFault != null &&
+        now.difference(_lastFrameFaultToast) >= const Duration(seconds: 5)) {
+      _lastFrameFaultToast = now;
+      debugPrint('frame rejected: $_frameFault');
+    }
+  }
+
+  Future<void> _drainFrames() async {
+    _decoding = true;
+    try {
+      while (!_disposed && mounted) {
+        final slice = _frameQueue.take();
+        if (slice == null) {
+          break;
+        }
+        final applied = await _applyFrame(slice.frame);
+        if (_disposed || !mounted) {
+          return;
+        }
+        if (!applied) {
+          _frameQueue.clear(requireFull: true);
+          _requestFullFrame();
+          break;
+        }
+      }
+    } finally {
+      _decoding = false;
+    }
+  }
+
+  Future<bool> _applyFrame(FrameMessage frame) async {
+    if (_disposed || !mounted || frame.seq <= _lastAppliedSeq) {
+      return false;
+    }
+    final newGeneration = frame.generation != _generation;
+    if (newGeneration && !frame.full) {
+      return false;
+    }
+    if ((frame.width != _remoteWidth || frame.height != _remoteHeight) &&
+        !frame.full) {
+      return false;
+    }
+
+    if (frame.full) {
+      final decoded = <(TileData, ui.Image)>[];
+      var decodedPixels = 0;
+      for (final tile in frame.tiles) {
+        final image = await _decodeTile(tile);
+        if (image == null) {
+          for (final (_, old) in decoded) {
+            old.dispose();
+          }
+          return false;
+        }
+        decoded.add((tile, image));
+        decodedPixels += image.width * image.height;
+        if (decodedPixels > maxRemotePixels) {
+          for (final (_, old) in decoded) {
+            old.dispose();
+          }
+          return false;
+        }
+      }
+      if (_disposed || !mounted) {
+        for (final (_, old) in decoded) {
+          old.dispose();
+        }
+        return false;
+      }
       for (final image in _tiles.values) {
         image.dispose();
       }
       _tiles.clear();
+      _cachePixels = 0;
+      for (final (tile, image) in decoded) {
+        _tiles[(tile.x, tile.y)] = image;
+        _cachePixels += image.width * image.height;
+      }
       _generation = frame.generation;
       _remoteWidth = frame.width;
       _remoteHeight = frame.height;
+      _lastAppliedSeq = frame.seq;
+      _frameQueue.markFullApplied();
+      _frameFault = null;
+      setState(() {
+        _waitingFirstFrame = false;
+      });
+      return true;
     }
 
-    final tiles = frame.tiles;
-    for (var start = 0; start < tiles.length; start += 8) {
-      final end = math.min(start + 8, tiles.length);
-      final decoded = <(TileData, ui.Image)>[];
-      for (var i = start; i < end; i++) {
-        final tile = tiles[i];
-        if (tile.width <= 0 ||
-            tile.height <= 0 ||
-            tile.x + tile.width > _remoteWidth ||
-            tile.y + tile.height > _remoteHeight) {
-          continue;
-        }
-        try {
-          final codec = await ui.instantiateImageCodec(tile.jpeg);
-          final frameInfo = await codec.getNextFrame();
-          codec.dispose();
-          decoded.add((tile, frameInfo.image));
-        } on Object catch (error) {
-          debugPrint('tile decode failed: $error');
-        }
+    for (final tile in frame.tiles) {
+      final image = await _decodeTile(tile);
+      if (image == null) {
+        return false;
       }
-      if (_disposed || !mounted) {
-        for (final (_, image) in decoded) {
-          image.dispose();
-        }
-        return;
+      if (_disposed ||
+          !mounted ||
+          frame.generation != _generation ||
+          frame.width != _remoteWidth ||
+          frame.height != _remoteHeight) {
+        image.dispose();
+        return false;
       }
-      if (_generation != frame.generation) {
-        for (final (_, image) in decoded) {
-          image.dispose();
-        }
-        return;
+      final key = (tile.x, tile.y);
+      final previous = _tiles[key];
+      final nextPixels = _cachePixels -
+          (previous == null ? 0 : previous.width * previous.height) +
+          image.width * image.height;
+      final nextCount = _tiles.length + (previous == null ? 1 : 0);
+      if (nextCount > maxCachedTiles || nextPixels > maxRemotePixels) {
+        image.dispose();
+        return false;
       }
-      for (final (tile, image) in decoded) {
-        final key = (tile.x, tile.y);
-        final previous = _tiles[key];
-        _tiles[key] = image;
-        previous?.dispose();
-      }
+      _tiles[key] = image;
+      previous?.dispose();
+      _cachePixels = nextPixels;
     }
+    _lastAppliedSeq = frame.seq;
+    if (mounted) {
+      setState(() {});
+    }
+    return true;
+  }
 
-    if (!mounted) {
-      return;
+  Future<ui.Image?> _decodeTile(TileData tile) async {
+    ui.ImmutableBuffer? buffer;
+    ui.ImageDescriptor? descriptor;
+    try {
+      buffer = await ui.ImmutableBuffer.fromUint8List(tile.jpeg);
+      descriptor = await ui.ImageDescriptor.encoded(buffer);
+      // The descriptor now owns the buffer.
+      buffer = null;
+      if (descriptor.width != tile.width || descriptor.height != tile.height) {
+        debugPrint(
+          'tile JPEG is ${descriptor.width}x${descriptor.height}, '
+          'declared ${tile.width}x${tile.height}; rejecting',
+        );
+        return null;
+      }
+      final codec = await descriptor.instantiateCodec(
+        targetWidth: tile.width,
+        targetHeight: tile.height,
+      );
+      try {
+        final frameInfo = await codec.getNextFrame();
+        final image = frameInfo.image;
+        if (image.width != tile.width || image.height != tile.height) {
+          image.dispose();
+          return null;
+        }
+        return image;
+      } finally {
+        codec.dispose();
+      }
+    } on Object catch (error) {
+      debugPrint('tile decode failed: $error');
+      return null;
+    } finally {
+      descriptor?.dispose();
+      buffer?.dispose();
     }
-    setState(() {
-      _waitingFirstFrame = false;
-    });
   }
 
   void _tickStats() {
@@ -735,6 +886,21 @@ class _WorkspacePageState extends State<WorkspacePage>
       ('模式', welcome.mode),
       ('图块', '${welcome.tileSize} px'),
       ('协议', 'v${welcome.protocolVersion} · ALPN yuanlian/1'),
+      (
+        '授权',
+        welcome.authenticated
+            ? '账号 ${welcome.account} · ${welcome.authMode}'
+            : '匿名开发模式 · ${welcome.authMode}',
+      ),
+      ('权限', permissionSummary(welcome.permissions)),
+      (
+        '票据到期',
+        welcome.ticketExpiresAt == 0
+            ? '无票据（开发直连）'
+            : DateTime.fromMillisecondsSinceEpoch(
+                welcome.ticketExpiresAt * 1000,
+              ).toLocal().toString(),
+      ),
       ('输入', _client.inputAllowed ? '已授权' : '仅查看'),
       (
         'TLS 指纹',
@@ -786,7 +952,7 @@ class _WorkspacePageState extends State<WorkspacePage>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      backgroundColor: const Color(0xFF0A0C0F),
+      backgroundColor: YlRemoteColors.background,
       body: SafeArea(
         child: Column(
         children: [
@@ -841,7 +1007,7 @@ class _WorkspacePageState extends State<WorkspacePage>
                             ),
                           ),
                           if (_waitingFirstFrame && _disconnectReason == null)
-                            const _WaitingOverlay(),
+                            _WaitingOverlay(message: _frameFault),
                           if (_disconnectReason != null)
                             _DisconnectedOverlay(
                               reason: _disconnectReason!,
@@ -930,26 +1096,26 @@ class _WorkspacePageState extends State<WorkspacePage>
 
   Widget _buildSuspendedBanner() {
     return Container(
-      color: const Color(0xFF2A2416),
+      color: YlRemoteColors.bannerSurface,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Row(
         children: [
           const Icon(
             Icons.pause_circle_outline_rounded,
             size: 16,
-            color: Color(0xFFFBBF24),
+            color: YlRemoteColors.viewOnly,
           ),
           const SizedBox(width: 8),
           const Expanded(
             child: Text(
               '应用进入后台，远程控制已暂停；恢复后默认处于查看模式。',
-              style: TextStyle(color: Color(0xFFFDE68A), fontSize: 12),
+              style: TextStyle(color: YlRemoteColors.bannerText, fontSize: 12),
             ),
           ),
           TextButton(
             style: TextButton.styleFrom(
               minimumSize: const Size(0, 36),
-              foregroundColor: const Color(0xFFFBBF24),
+              foregroundColor: YlRemoteColors.viewOnly,
             ),
             onPressed: () {
               setState(() => _lifecycleSuspended = false);
@@ -970,27 +1136,27 @@ class _WorkspacePageState extends State<WorkspacePage>
         height: 56,
         padding: const EdgeInsets.symmetric(horizontal: 6),
         decoration: const BoxDecoration(
-          color: Color(0xFF14171C),
-          border: Border(bottom: BorderSide(color: Color(0xFF232831))),
+          color: YlRemoteColors.chrome,
+          border: Border(bottom: BorderSide(color: YlRemoteColors.chromeOutline)),
         ),
         child: Row(
           children: [
             IconButton(
               tooltip: '断开并返回',
               onPressed: _leave,
-              icon: const Icon(Icons.arrow_back_rounded, color: Colors.white70),
+              icon: const Icon(Icons.arrow_back_rounded, color: YlRemoteColors.textSecondary),
             ),
             Container(
               width: 30,
               height: 30,
               decoration: BoxDecoration(
-                color: const Color(0xFF2563EB).withValues(alpha: 0.18),
+                color: YlRemoteColors.accent.withValues(alpha: 0.18),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: const Icon(
                 Icons.desktop_windows_rounded,
                 size: 17,
-                color: Color(0xFF7EA6FF),
+                color: YlRemoteColors.accentIcon,
               ),
             ),
             const SizedBox(width: 8),
@@ -999,7 +1165,7 @@ class _WorkspacePageState extends State<WorkspacePage>
                 welcome?.hostName ?? widget.profile.name,
                 overflow: TextOverflow.ellipsis,
                 style: theme.textTheme.bodyMedium?.copyWith(
-                  color: Colors.white,
+                  color: YlRemoteColors.textPrimary,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -1018,10 +1184,10 @@ class _WorkspacePageState extends State<WorkspacePage>
                       ? Icons.mouse_rounded
                       : Icons.visibility_outlined,
               color: !_controlMode
-                  ? const Color(0xFF60A5FA)
+                  ? YlRemoteColors.viewing
                   : _inputEnabled
-                      ? const Color(0xFF4ADE80)
-                      : const Color(0xFFFBBF24),
+                      ? YlRemoteColors.connected
+                      : YlRemoteColors.viewOnly,
               onTap: _toggleControlMode,
             ),
             Tooltip(
@@ -1032,14 +1198,14 @@ class _WorkspacePageState extends State<WorkspacePage>
                   _zoom > 1.01
                       ? Icons.zoom_out_rounded
                       : Icons.zoom_in_rounded,
-                  color: Colors.white70,
+                  color: YlRemoteColors.textSecondary,
                 ),
               ),
             ),
             PopupMenuButton<String>(
               tooltip: '会话操作',
-              color: const Color(0xFF1D222A),
-              icon: const Icon(Icons.more_vert_rounded, color: Colors.white70),
+              color: YlRemoteColors.chromeRaised,
+              icon: const Icon(Icons.more_vert_rounded, color: YlRemoteColors.textSecondary),
               onSelected: (value) {
                 if (value == 'toggle-control' ||
                     value == 'zoom-in' ||
@@ -1122,28 +1288,28 @@ class _WorkspacePageState extends State<WorkspacePage>
       height: 56,
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: const BoxDecoration(
-        color: Color(0xFF14171C),
-        border: Border(bottom: BorderSide(color: Color(0xFF232831))),
+        color: YlRemoteColors.chrome,
+        border: Border(bottom: BorderSide(color: YlRemoteColors.chromeOutline)),
       ),
       child: Row(
         children: [
           IconButton(
             tooltip: '断开并返回',
             onPressed: _leave,
-            icon: const Icon(Icons.arrow_back_rounded, color: Colors.white70),
+            icon: const Icon(Icons.arrow_back_rounded, color: YlRemoteColors.textSecondary),
           ),
           const SizedBox(width: 4),
           Container(
             width: 30,
             height: 30,
             decoration: BoxDecoration(
-              color: const Color(0xFF2563EB).withValues(alpha: 0.18),
+              color: YlRemoteColors.accent.withValues(alpha: 0.18),
               borderRadius: BorderRadius.circular(8),
             ),
             child: const Icon(
               Icons.desktop_windows_rounded,
               size: 17,
-              color: Color(0xFF7EA6FF),
+              color: YlRemoteColors.accentIcon,
             ),
           ),
           const SizedBox(width: 10),
@@ -1154,14 +1320,14 @@ class _WorkspacePageState extends State<WorkspacePage>
               Text(
                 welcome?.hostName ?? widget.profile.name,
                 style: theme.textTheme.bodyMedium?.copyWith(
-                  color: Colors.white,
+                  color: YlRemoteColors.textPrimary,
                   fontWeight: FontWeight.w600,
                 ),
               ),
               Text(
                 widget.profile.address,
                 style: theme.textTheme.bodySmall?.copyWith(
-                  color: Colors.white54,
+                  color: YlRemoteColors.textTertiary,
                   fontSize: 11,
                 ),
               ),
@@ -1182,17 +1348,17 @@ class _WorkspacePageState extends State<WorkspacePage>
                 ? Icons.mouse_rounded
                 : Icons.visibility_outlined,
             color: !_controlMode
-                ? const Color(0xFF60A5FA)
+                ? YlRemoteColors.viewing
                 : _inputEnabled
-                    ? const Color(0xFF4ADE80)
-                    : const Color(0xFFFBBF24),
+                    ? YlRemoteColors.connected
+                    : YlRemoteColors.viewOnly,
             onTap: _toggleControlMode,
           ),
           const Spacer(),
           PopupMenuButton<String>(
             tooltip: '显示与控制',
-            color: const Color(0xFF1D222A),
-            icon: const Icon(Icons.aspect_ratio_rounded, color: Colors.white70),
+            color: YlRemoteColors.chromeRaised,
+            icon: const Icon(Icons.aspect_ratio_rounded, color: YlRemoteColors.textSecondary),
             onSelected: _handleViewCommand,
             itemBuilder: (context) => _viewMenuItems(),
           ),
@@ -1200,7 +1366,7 @@ class _WorkspacePageState extends State<WorkspacePage>
             message: '请求 Host 发送全量帧',
             child: IconButton(
               onPressed: _client.requestKeyframe,
-              icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
+              icon: const Icon(Icons.refresh_rounded, color: YlRemoteColors.textSecondary),
             ),
           ),
           Tooltip(
@@ -1220,8 +1386,8 @@ class _WorkspacePageState extends State<WorkspacePage>
               icon: Icon(
                 Icons.folder_outlined,
                 color: _client.fileEnabled
-                    ? Colors.white70
-                    : Colors.white.withValues(alpha: 0.25),
+                    ? YlRemoteColors.textSecondary
+                    : YlRemoteColors.iconDisabled,
               ),
             ),
           ),
@@ -1229,14 +1395,14 @@ class _WorkspacePageState extends State<WorkspacePage>
             message: '会话详情与诊断',
             child: IconButton(
               onPressed: _showDetails,
-              icon: const Icon(Icons.info_outline_rounded, color: Colors.white70),
+              icon: const Icon(Icons.info_outline_rounded, color: YlRemoteColors.textSecondary),
             ),
           ),
           const SizedBox(width: 6),
           FilledButton.tonalIcon(
             style: FilledButton.styleFrom(
-              backgroundColor: const Color(0xFF3A1D22),
-              foregroundColor: const Color(0xFFFCA5A5),
+              backgroundColor: YlRemoteColors.dangerSurface,
+              foregroundColor: YlRemoteColors.dangerText,
               minimumSize: const Size(0, 36),
             ),
             onPressed: _leave,
@@ -1250,7 +1416,7 @@ class _WorkspacePageState extends State<WorkspacePage>
 
   Widget _buildStatusBar(ThemeData theme) {
     final mono = theme.textTheme.bodySmall?.copyWith(
-      color: Colors.white54,
+      color: YlRemoteColors.textTertiary,
       fontFamily: 'Consolas',
       fontSize: 11.5,
     );
@@ -1265,8 +1431,8 @@ class _WorkspacePageState extends State<WorkspacePage>
         height: 30,
         padding: const EdgeInsets.symmetric(horizontal: 10),
         decoration: const BoxDecoration(
-          color: Color(0xFF101318),
-          border: Border(top: BorderSide(color: Color(0xFF1E232B))),
+          color: YlRemoteColors.statusBar,
+          border: Border(top: BorderSide(color: YlRemoteColors.statusOutline)),
         ),
         child: Row(
           children: [
@@ -1276,8 +1442,8 @@ class _WorkspacePageState extends State<WorkspacePage>
                   : Icons.monitor_rounded,
               size: 13,
               color: _disconnectReason != null
-                  ? const Color(0xFFF87171)
-                  : const Color(0xFF4ADE80),
+                  ? YlRemoteColors.danger
+                  : YlRemoteColors.connected,
             ),
             const SizedBox(width: 5),
             Text(state, style: mono),
@@ -1306,8 +1472,8 @@ class _WorkspacePageState extends State<WorkspacePage>
       height: 30,
       padding: const EdgeInsets.symmetric(horizontal: 14),
       decoration: const BoxDecoration(
-        color: Color(0xFF101318),
-        border: Border(top: BorderSide(color: Color(0xFF1E232B))),
+        color: YlRemoteColors.statusBar,
+        border: Border(top: BorderSide(color: YlRemoteColors.statusOutline)),
       ),
       child: Row(
         children: [
@@ -1317,8 +1483,8 @@ class _WorkspacePageState extends State<WorkspacePage>
                 : Icons.monitor_rounded,
             size: 13,
             color: _disconnectReason != null
-                ? const Color(0xFFF87171)
-                : const Color(0xFF4ADE80),
+                ? YlRemoteColors.danger
+                : YlRemoteColors.connected,
           ),
           const SizedBox(width: 6),
           Text(state, style: mono),
@@ -1331,7 +1497,7 @@ class _WorkspacePageState extends State<WorkspacePage>
           const SizedBox(width: 16),
           Text('RTT ${_client.rttMs} ms', style: mono),
           const Spacer(),
-          const Icon(Icons.lock_outline_rounded, size: 12, color: Colors.white38),
+          const Icon(Icons.lock_outline_rounded, size: 12, color: YlRemoteColors.textDisabled),
           const SizedBox(width: 5),
           Text('TLS 已固定 · 直连', style: mono),
         ],
@@ -1394,7 +1560,7 @@ class _RemotePainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(
       Offset.zero & size,
-      Paint()..color = const Color(0xFF0A0C0F),
+      Paint()..color = YlRemoteColors.background,
     );
     final rect = viewport.imageRect;
     if (rect.isEmpty) {
@@ -1421,7 +1587,7 @@ class _RemotePainter extends CustomPainter {
     canvas.drawRect(
       rect.deflate(0.5),
       Paint()
-        ..color = const Color(0x22FFFFFF)
+        ..color = YlRemoteColors.frameOutline
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1,
     );
@@ -1442,12 +1608,12 @@ class _RemotePainter extends CustomPainter {
         canvas.drawPath(
           path,
           Paint()
-            ..color = Colors.black
+            ..color = YlRemoteColors.cursorOutline
             ..style = PaintingStyle.stroke
             ..strokeWidth = 2.6
             ..strokeJoin = StrokeJoin.round,
         );
-        canvas.drawPath(path, Paint()..color = Colors.white);
+        canvas.drawPath(path, Paint()..color = YlRemoteColors.textPrimary);
       }
     }
   }
@@ -1457,45 +1623,49 @@ class _RemotePainter extends CustomPainter {
 }
 
 class _WaitingOverlay extends StatelessWidget {
-  const _WaitingOverlay();
+  const _WaitingOverlay({this.message});
+
+  final String? message;
 
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
-      color: const Color(0x88000000),
+      color: YlRemoteColors.overlay,
       child: Center(
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
           decoration: BoxDecoration(
-            color: const Color(0xFF171B21),
+            color: YlRemoteColors.panel,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF2A303A)),
+            border: Border.all(color: YlRemoteColors.panelOutline),
           ),
-          child: const Row(
+          child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              SizedBox(
+              const SizedBox(
                 width: 20,
                 height: 20,
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
-              SizedBox(width: 14),
+              const SizedBox(width: 14),
               Flexible(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
+                    const Text(
                       '等待首帧',
                       style: TextStyle(
-                        color: Colors.white,
+                        color: YlRemoteColors.textPrimary,
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    SizedBox(height: 3),
+                    const SizedBox(height: 3),
                     Text(
-                      '正在等待 Host 采集与编码首幅画面',
-                      style: TextStyle(color: Colors.white54, fontSize: 12),
+                      message == null
+                          ? '正在等待 Host 采集与编码首幅画面'
+                          : '首帧未通过校验（$message），正在请求完整刷新',
+                      style: const TextStyle(color: YlRemoteColors.textTertiary, fontSize: 12),
                     ),
                   ],
                 ),
@@ -1516,15 +1686,15 @@ class _DisconnectedOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
-      color: const Color(0xB3000000),
+      color: YlRemoteColors.overlayStrong,
       child: Center(
         child: Container(
           width: 420,
           padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(
-            color: const Color(0xFF171B21),
+            color: YlRemoteColors.panel,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF3A2A2D)),
+            border: Border.all(color: YlRemoteColors.dangerOutline),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1532,12 +1702,12 @@ class _DisconnectedOverlay extends StatelessWidget {
             children: [
               const Row(
                 children: [
-                  Icon(Icons.link_off_rounded, color: Color(0xFFF87171)),
+                  Icon(Icons.link_off_rounded, color: YlRemoteColors.danger),
                   SizedBox(width: 8),
                   Text(
                     '连接中断',
                     style: TextStyle(
-                      color: Colors.white,
+                      color: YlRemoteColors.textPrimary,
                       fontSize: 17,
                       fontWeight: FontWeight.w600,
                     ),
@@ -1547,7 +1717,7 @@ class _DisconnectedOverlay extends StatelessWidget {
               const SizedBox(height: 10),
               Text(
                 reason,
-                style: const TextStyle(color: Colors.white70, fontSize: 13),
+                style: const TextStyle(color: YlRemoteColors.textSecondary, fontSize: 13),
               ),
               const SizedBox(height: 18),
               Align(
@@ -1569,7 +1739,7 @@ class _DarkPill extends StatelessWidget {
   const _DarkPill({
     required this.label,
     required this.icon,
-    this.color = Colors.white70,
+    this.color = YlRemoteColors.textSecondary,
     this.onTap,
   });
 
@@ -1583,9 +1753,9 @@ class _DarkPill extends StatelessWidget {
     final content = Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
-        color: const Color(0xFF1D222A),
+        color: YlRemoteColors.chromeRaised,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: const Color(0xFF2A303A)),
+        border: Border.all(color: YlRemoteColors.panelOutline),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

@@ -8,3 +8,11 @@ viewer-screen.png
 /dist/
 /server/yl-server
 /server/target/
+# Local runtime database (accounts, devices, tickets); never commit.
+/server/*.db*
+# Signing material and local credential files must never be committed.
+*.keystore
+*.jks
+key.properties
+client/android/key.properties
+client/flutter_*.log

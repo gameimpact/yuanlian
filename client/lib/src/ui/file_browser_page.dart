@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 
 import '../net/protocol.dart';
 import '../net/remote_client.dart';
+import '../platform/file_commit.dart';
+import 'design_tokens.dart';
 import 'widgets.dart';
 
 class FileBrowserPage extends StatefulWidget {
@@ -15,10 +17,10 @@ class FileBrowserPage extends StatefulWidget {
   final RemoteClient client;
 
   @override
-  State<FileBrowserPage> createState() => _FileBrowserPageState();
+  State<FileBrowserPage> createState() => FileBrowserPageState();
 }
 
-class _FileBrowserPageState extends State<FileBrowserPage> {
+class FileBrowserPageState extends State<FileBrowserPage> {
   late final StreamSubscription<RemoteEvent> _events;
   final int _sessionTaskBase = DateTime.now().millisecondsSinceEpoch;
   int _nextTask = 1;
@@ -46,6 +48,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
   double _transferProgress = 0;
   double _split = 0.5;
   bool _showRemoteMobile = true;
+  bool _debugBusy = false;
 
   @override
   void initState() {
@@ -53,8 +56,10 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
     _localDir = _defaultLocalDirectory();
     _events = widget.client.events.listen(_onEvent);
     _loadLocal();
-    if (widget.client.fileEnabled) {
+    if (widget.client.fileEnabled && widget.client.fileRead) {
       _loadRemote('');
+    } else if (widget.client.fileEnabled) {
+      _remoteError = '本次会话没有文件读取权限，只能按权限上传';
     } else {
       _remoteError = 'Host 未配置 --file-root，文件访问未开启';
     }
@@ -64,8 +69,63 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
   void dispose() {
     _remoteTimer?.cancel();
     _events.cancel();
-    _download?.sink.close();
+    unawaited(_abortDownload());
     super.dispose();
+  }
+
+  /// Test-only: renders the real transfer banner without starting a network
+  /// task. It does not fabricate a successful product transfer.
+  @visibleForTesting
+  void debugSetTransfer({
+    required String message,
+    required double progress,
+    required bool success,
+    required bool busy,
+  }) {
+    setState(() {
+      _transferMessage = message;
+      _transferProgress = progress;
+      _transferOk = success;
+      _download = null;
+      _upload = null;
+      _debugBusy = busy;
+    });
+  }
+
+  /// Cancels the active download at the Host, closes the local sink and
+  /// removes the temporary file. This is the same terminal path used by the
+  /// cancel button, page exit and disconnect handling.
+  Future<void> _abortDownload() async {
+    final task = _download;
+    if (task == null) {
+      return;
+    }
+    _download = null;
+    widget.client.cancelFileTask(task.taskId);
+    await _cleanupDownloadTask(task, deleteTemp: true);
+  }
+
+  Future<void> _cleanupDownloadTask(
+    _DownloadTask task, {
+    required bool deleteTemp,
+  }) async {
+    try {
+      await task.sink.flush();
+    } on Object {
+      // The sink may already be broken; closing it is still required.
+    }
+    try {
+      await task.sink.close();
+    } on Object {
+      // Ignore.
+    }
+    if (deleteTemp) {
+      try {
+        await task.temp.delete();
+      } on Object {
+        // Already committed or removed.
+      }
+    }
   }
 
   Directory _defaultLocalDirectory() {
@@ -103,7 +163,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
   int _allocateTask() => _sessionTaskBase + _nextTask++;
 
   Future<void> _loadRemote(String path) async {
-    if (!widget.client.fileEnabled) {
+    if (!widget.client.fileEnabled || !widget.client.fileRead) {
       return;
     }
     _remoteTimer?.cancel();
@@ -305,10 +365,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
       if (actual.toLowerCase() != expectedHash.toLowerCase()) {
         throw StateError('SHA-256 校验失败');
       }
-      if (task.destination.existsSync()) {
-        await task.destination.delete();
-      }
-      await task.temp.rename(task.destination.path);
+      final destination = _commitDownload(task.temp, task.name);
       if (!mounted) {
         return;
       }
@@ -317,7 +374,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
         _transferOk = true;
         _transferProgress = 1;
         _transferMessage =
-            '下载完成：$path → ${task.destination.path}\nSHA-256 $actual';
+            '下载完成：$path → ${destination.path}\nSHA-256 $actual';
       });
       await _loadLocal();
     } on Object catch (error) {
@@ -325,14 +382,34 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
     }
   }
 
+  /// Atomically commits the verified temporary file. If the first candidate
+  /// name is taken (even by a file created during the download), a numbered
+  /// name is selected; an existing file is never deleted or replaced.
+  File _commitDownload(File temp, String name) {
+    final dot = name.lastIndexOf('.');
+    final stem = dot > 0 ? name.substring(0, dot) : name;
+    final extension = dot > 0 ? name.substring(dot) : '';
+    for (var attempt = 0; attempt < 1000; attempt++) {
+      final candidateName = attempt == 0 ? name : '$stem ($attempt)$extension';
+      final candidate = File(
+        '${_localDir.path}${Platform.pathSeparator}$candidateName',
+      );
+      if (!candidate.existsSync()) {
+        final status = commitNoReplace(temp, candidate);
+        if (status == CommitStatus.committed) {
+          return candidate;
+        }
+      }
+    }
+    throw StateError('目标目录中同名文件过多，无法选择安全的文件名');
+  }
+
   void _failDownload(String message, {bool cleanup = true}) {
     final task = _download;
     _download = null;
     if (task != null) {
-      task.sink.close().catchError((_) {});
-      if (cleanup) {
-        task.temp.delete().catchError((_) => task.temp);
-      }
+      widget.client.cancelFileTask(task.taskId);
+      unawaited(_cleanupDownloadTask(task, deleteTemp: cleanup));
     }
     if (!mounted) {
       return;
@@ -532,7 +609,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final busy = _download != null || _upload != null;
+    final busy = _download != null || _upload != null || _debugBusy;
     return PopScope(
       canPop: !busy,
       onPopInvokedWithResult: (didPop, _) async {
@@ -557,8 +634,7 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
           ),
         );
         if (leave == true && context.mounted) {
-          _download?.sink.close();
-          _download = null;
+          unawaited(_abortDownload());
           if (_upload != null) {
             widget.client.cancelFileTask(_upload!.taskId);
             _upload = null;
@@ -686,8 +762,12 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
 
   Widget _buildFileCommandBar(ThemeData theme, bool busy) {
     final compact = MediaQuery.sizeOf(context).width < 800;
-    final canUpload = _selectedLocal?.isDir == false && !busy;
-    final canDownload = _selectedRemote?.isDir == false && !busy;
+    final canUpload = widget.client.fileWrite &&
+        _selectedLocal?.isDir == false &&
+        !busy;
+    final canDownload = widget.client.fileRead &&
+        _selectedRemote?.isDir == false &&
+        !busy;
     return Container(
       height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -706,7 +786,9 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
           Expanded(
             child: Text(
               widget.client.fileEnabled
-                  ? '授权目录 · ${widget.client.fileRootLabel}'
+                  ? '授权目录 · ${widget.client.fileRootLabel} · '
+                      '${widget.client.fileRead ? '读取' : ''}'
+                      '${widget.client.fileWrite ? '写入' : ''}'
                   : '未授权目录',
               overflow: TextOverflow.ellipsis,
               style: theme.textTheme.bodySmall?.copyWith(
@@ -746,10 +828,12 @@ class _FileBrowserPageState extends State<FileBrowserPage> {
   }
 
   Widget _buildMobileFileActions(ThemeData theme, bool busy) {
-    final canUpload = _showRemoteMobile == false &&
+    final canUpload = widget.client.fileWrite &&
+        _showRemoteMobile == false &&
         _selectedLocal?.isDir == false &&
         !busy;
-    final canDownload = _showRemoteMobile == true &&
+    final canDownload = widget.client.fileRead &&
+        _showRemoteMobile == true &&
         _selectedRemote?.isDir == false &&
         !busy;
     return Container(
@@ -968,7 +1052,14 @@ class _Pane extends StatelessWidget {
               children: [
                 Icon(icon, size: 18, color: theme.colorScheme.primary),
                 const SizedBox(width: 8),
-                Text(title, style: theme.textTheme.titleMedium),
+                Flexible(
+                  child: Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleMedium,
+                  ),
+                ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -1101,7 +1192,7 @@ class _FileTile extends StatelessWidget {
                 isDir ? Icons.folder_rounded : Icons.insert_drive_file_outlined,
                 size: 19,
                 color: isDir
-                    ? const Color(0xFFD9A441)
+                    ? YlStatus.folder
                     : theme.colorScheme.onSurfaceVariant,
               ),
               const SizedBox(width: 9),
@@ -1163,7 +1254,7 @@ class _TransferBanner extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
       color: success
-          ? const Color(0xFF16A34A).withValues(alpha: 0.10)
+          ? YlStatus.success.withValues(alpha: 0.10)
           : theme.colorScheme.surfaceContainerHighest,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1178,7 +1269,7 @@ class _TransferBanner extends StatelessWidget {
                         : Icons.info_outline_rounded,
                 size: 16,
                 color: success
-                    ? const Color(0xFF16A34A)
+                    ? YlStatus.success
                     : theme.colorScheme.primary,
               ),
               const SizedBox(width: 8),

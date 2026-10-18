@@ -1,0 +1,24 @@
+services:
+  yuanlian-server:
+    build:
+      context: ../../..
+      dockerfile: packaging/server/docker/Dockerfile
+    image: yuanlian-server:0.2.0
+    restart: unless-stopped
+    ports:
+      # Keep the control plane on loopback; expose it through a TLS proxy.
+      - "127.0.0.1:18080:18080"
+    environment:
+      YUANLIAN_BIND: 0.0.0.0:18080
+      YUANLIAN_DB: /data/yuanlian.db
+      RUST_LOG: yl_server=info,info
+    volumes:
+      - yuanlian-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  yuanlian-data:

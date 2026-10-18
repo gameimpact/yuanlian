@@ -1,4 +1,6 @@
+mod approval;
 mod capture;
+mod control;
 mod files;
 mod input;
 mod session;
@@ -6,18 +8,20 @@ mod tls;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-use yl_proto::format_fingerprint;
+use yl_proto::{device_id_from_fingerprint, format_fingerprint};
 use yl_tiles::{TileDiffer, TileSettings};
 
+use control::ControlPlane;
 use session::HostConfig;
 
 #[derive(Debug, Parser)]
@@ -58,6 +62,35 @@ struct Args {
     /// 授权给远控文件访问的根目录。未指定时文件功能关闭。
     #[arg(long, value_name = "DIR")]
     file_root: Option<PathBuf>,
+
+    /// 文件只读：仍然允许列目录/下载，禁止上传与覆盖。
+    #[arg(long)]
+    file_read_only: bool,
+
+    /// 控制服务端基础地址，例如 http://127.0.0.1:18080。
+    #[arg(long, value_name = "URL")]
+    server_url: Option<String>,
+
+    /// 控制服务端签发的设备令牌。优先使用环境变量 YUANLIAN_DEVICE_TOKEN，
+    /// 避免出现在 shell 历史/进程列表中。
+    #[arg(long, value_name = "TOKEN")]
+    device_token: Option<String>,
+
+    /// 允许未经账号/配对票据的匿名直连。仅用于开发，启动时会明确告警。
+    #[arg(long)]
+    allow_anonymous: bool,
+
+    /// 跳过本机授权对话框。仅用于自动化测试/专用主机，必须显式开启。
+    #[arg(long)]
+    auto_approve: bool,
+
+    /// TLS 身份目录；默认 %LOCALAPPDATA%\YuanLian\identity。身份在重启间保持不变。
+    #[arg(long, value_name = "DIR")]
+    identity_dir: Option<PathBuf>,
+
+    /// 打印持久设备 ID 与 TLS 指纹后退出，用于在控制服务端登记设备。
+    #[arg(long)]
+    print_identity: bool,
 
     /// 列出显示器及坐标后退出。
     #[arg(long)]
@@ -128,11 +161,55 @@ fn main() -> Result<()> {
         });
     }
 
+    if args.auto_approve {
+        warn!("--auto-approve 已开启：本机授权对话框会被跳过，仅应用于隔离测试/专用主机");
+    }
+    if args.file_read_only && args.file_root.is_none() {
+        warn!("--file-read-only 未配合 --file-root，文件功能仍关闭");
+    }
+    let identity_dir = args
+        .identity_dir
+        .clone()
+        .unwrap_or_else(tls::default_identity_directory);
+    let identity = tls::load_or_create_identity(&identity_dir)?;
+    let fingerprint = format_fingerprint(&identity.fingerprint);
+    let device_id = device_id_from_fingerprint(&fingerprint);
+    println!("远联 Host 设备 ID: {device_id}");
+    println!("TLS SHA-256 指纹: {fingerprint}");
+    if args.print_identity {
+        println!("身份目录: {}", identity_dir.display());
+        return Ok(());
+    }
+    let device_token = args
+        .device_token
+        .clone()
+        .or_else(|| std::env::var("YUANLIAN_DEVICE_TOKEN").ok());
+    let control = match args.server_url.as_deref() {
+        Some(url) => {
+            let token = device_token
+                .as_deref()
+                .context("--server-url 需要 --device-token 或环境变量 YUANLIAN_DEVICE_TOKEN")?;
+            Some(ControlPlane::connect(url, token, &device_id)?)
+        }
+        None => {
+            if !args.allow_anonymous {
+                bail!(
+                    "未配置 --server-url，且未显式指定 --allow-anonymous；\
+                     为安全默认拒绝所有连接。开发期直连请显式加 --allow-anonymous。"
+                );
+            }
+            None
+        }
+    };
+    if args.server_url.is_some() && args.allow_anonymous {
+        warn!("已同时启用票据校验与匿名直连；匿名连接会明确标记为开发模式");
+    }
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("build Tokio runtime")?;
-    runtime.block_on(run_server(args, tile_settings))
+    runtime.block_on(run_server(args, tile_settings, identity, control))
 }
 
 fn run_capture_test(path: &Path, monitor: usize, settings: &TileSettings) -> Result<()> {
@@ -181,22 +258,43 @@ fn save_screenshot(image: &image::RgbaImage, path: &std::path::Path) -> Result<(
     Ok(())
 }
 
-async fn run_server(args: Args, tile_settings: TileSettings) -> Result<()> {
+async fn run_server(
+    args: Args,
+    tile_settings: TileSettings,
+    identity: tls::TlsIdentity,
+    control: Option<Arc<ControlPlane>>,
+) -> Result<()> {
     let listen: SocketAddr = args
         .listen
         .parse()
         .with_context(|| format!("invalid listen address: {}", args.listen))?;
-    let identity = tls::generate_identity()?;
     let fingerprint = format_fingerprint(&identity.fingerprint);
     let host_name = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "windows-host".into());
-    let host_id = fingerprint[..16].to_lowercase();
+    let host_id = device_id_from_fingerprint(&fingerprint);
+    if let Some(control) = control.as_ref() {
+        if control.device_id() != host_id {
+            bail!(
+                "控制服务设备 ID 与本地身份不一致：server={} local={host_id}",
+                control.device_id()
+            );
+        }
+    }
 
-    println!("远联 Host（M0 开发版）");
+    println!("远联 Host（阶段 B 开发版）");
     println!("设备名: {host_name}");
+    println!("设备 ID: {host_id}");
     println!("TLS SHA-256 指纹: {fingerprint}");
     println!("查看器命令: yl-viewer --connect {listen} --fingerprint {fingerprint}");
+    println!(
+        "授权模式: {}",
+        if control.is_some() {
+            "账号/配对签发的短时会话票据 + 本机确认"
+        } else {
+            "匿名开发直连（--allow-anonymous，未经账号/配对授权）"
+        }
+    );
     if args.allow_input {
-        println!("输入注入: 已启用（--allow-input）");
+        println!("输入注入: 已启用（--allow-input），仍需票据/本机权限允许");
     } else {
         println!("输入注入: 未启用（仅查看）");
     }
@@ -204,7 +302,15 @@ async fn run_server(args: Args, tile_settings: TileSettings) -> Result<()> {
         Some(root) => {
             let canonical = std::fs::canonicalize(root)
                 .with_context(|| format!("文件根目录无效: {}", root.display()))?;
-            println!("文件访问: 已授权 {}", canonical.display());
+            println!(
+                "文件访问: {} {}",
+                if args.file_read_only {
+                    "只读"
+                } else {
+                    "读取+写入"
+                },
+                canonical.display()
+            );
         }
         None => println!("文件访问: 未授权（未指定 --file-root）"),
     }
@@ -224,6 +330,10 @@ async fn run_server(args: Args, tile_settings: TileSettings) -> Result<()> {
         fps: args.fps.clamp(1, 60),
         tile_settings,
         file_root: args.file_root.clone(),
+        file_read_only: args.file_read_only,
+        allow_anonymous: args.allow_anonymous,
+        auto_approve: args.auto_approve,
+        control_plane: control,
     };
 
     loop {

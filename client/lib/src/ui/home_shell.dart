@@ -1,9 +1,9 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/profile.dart';
+import '../models/session_auth.dart';
+import 'account_page.dart';
 import 'connection_progress_page.dart';
 import 'design_tokens.dart';
 import 'home_page.dart';
@@ -15,6 +15,7 @@ class HomeShell extends StatefulWidget {
     required this.themeMode,
     required this.onThemeModeChanged,
     this.initialConnection,
+    this.initialSessionAuth,
     this.inputSelfTest = false,
     this.autoOpenFiles = false,
   });
@@ -22,6 +23,7 @@ class HomeShell extends StatefulWidget {
   final ThemeMode themeMode;
   final ValueChanged<ThemeMode> onThemeModeChanged;
   final ConnectionProfile? initialConnection;
+  final SessionAuth? initialSessionAuth;
   final bool inputSelfTest;
   final bool autoOpenFiles;
 
@@ -36,7 +38,8 @@ class _HomeShellState extends State<HomeShell> {
   List<ConnectionProfile> _profiles = <ConnectionProfile>[];
   final FocusNode _addressFocus = FocusNode(debugLabel: 'host-address');
 
-  bool get _isWindows => Platform.isWindows;
+  bool _usesWindowsShell(BuildContext context) =>
+      Theme.of(context).platform == TargetPlatform.windows;
 
   @override
   void initState() {
@@ -100,6 +103,7 @@ class _HomeShellState extends State<HomeShell> {
       MaterialPageRoute<void>(
         builder: (_) => ConnectionProgressPage(
           profile: profile,
+          sessionAuth: widget.initialSessionAuth,
           onConnected: _remember,
           inputSelfTest: widget.inputSelfTest,
           autoOpenFiles: widget.autoOpenFiles,
@@ -138,11 +142,13 @@ class _HomeShellState extends State<HomeShell> {
         content: const SizedBox(
           width: 460,
           child: Text(
-            '当前为直连 Host 的 M0/M1 开发版。\n\n'
+            '当前为阶段 B 开发版。\n\n'
             '· Windows/Android 客户端通过 TLS + SHA-256 指纹连接 Host；\n'
-            '· 画面使用变化图块（临时 Dart 合成），不是 Moonlight/Quality 模式；\n'
+            '· 账号登录、设备目录、配对、短时票据与中心撤权已接入；Host 仍会本机确认；\n'
+            '· 未登录的匿名直连必须由 Host 显式 --allow-anonymous，默认拒绝；\n'
+            '· 画面使用变化图块（Dart 合成），不是 Moonlight/Quality 模式；\n'
             '· 文件支持单文件上传/下载与 SHA-256 校验；\n'
-            '· 账号、配对、中继、质量模式、Linux、Android 被控 Host 未实现。\n\n'
+            '· MFA/恢复码、中继、质量模式、Linux、Android 被控 Host 未实现。\n\n'
             '不要把开发版 Host 暴露到公网。',
           ),
         ),
@@ -161,31 +167,38 @@ class _HomeShellState extends State<HomeShell> {
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
+    final isWindows = _usesWindowsShell(context);
     final home = HomePage(
       profiles: _profiles,
       onConnect: _openConnection,
       onRemove: _removeProfile,
       addressFocusNode: _addressFocus,
-      showHeader: _isWindows,
-      compact: !_isWindows,
+      showHeader: isWindows,
+      compact: !isWindows,
     );
+    final account = AccountPage(onConnected: _remember);
     final settings = SettingsPage(
       themeMode: widget.themeMode,
       onThemeModeChanged: widget.onThemeModeChanged,
       profiles: _profiles,
-      showHeader: _isWindows,
+      showHeader: isWindows,
       onClearProfiles: () async {
         setState(() => _profiles = <ConnectionProfile>[]);
         await LocalStore.saveProfiles(<ConnectionProfile>[]);
       },
     );
-    final pages = <Widget>[home, settings];
+    final pages = <Widget>[home, account, settings];
+    final title = switch (_selected) {
+      0 => '连接',
+      1 => '账号与设备',
+      _ => '设置',
+    };
 
-    if (_isWindows) {
+    if (isWindows) {
       return CallbackShortcuts(
         bindings: <ShortcutActivator, VoidCallback>{
           const SingleActivator(LogicalKeyboardKey.comma, control: true): () =>
-              _openPage(1),
+              _openPage(2),
           const SingleActivator(LogicalKeyboardKey.keyL, control: true):
               _focusAddress,
           const SingleActivator(LogicalKeyboardKey.f1): _showHelp,
@@ -210,7 +223,7 @@ class _HomeShellState extends State<HomeShell> {
                         child: Column(
                           children: [
                             _WindowsCommandBar(
-                              title: _selected == 0 ? '连接' : '设置',
+                              title: title,
                               onHelp: _showHelp,
                             ),
                             Expanded(
@@ -234,7 +247,7 @@ class _HomeShellState extends State<HomeShell> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_selected == 0 ? '连接' : '设置'),
+        title: Text(title),
         actions: [
           IconButton(
             tooltip: '帮助',
@@ -255,6 +268,11 @@ class _HomeShellState extends State<HomeShell> {
             icon: Icon(Icons.link_outlined),
             selectedIcon: Icon(Icons.link_rounded),
             label: '连接',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.devices_other_outlined),
+            selectedIcon: Icon(Icons.devices_other_rounded),
+            label: '设备',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),
@@ -285,14 +303,14 @@ class _WindowsSidebar extends StatelessWidget {
     final theme = Theme.of(context);
     final items = <_WindowsNavItem>[
       const _WindowsNavItem('连接', Icons.link_rounded, page: 0),
-      const _WindowsNavItem('设备', Icons.devices_other_rounded, enabled: false),
+      const _WindowsNavItem('账号与设备', Icons.devices_other_rounded, page: 1),
       const _WindowsNavItem(
         '文件传输',
         Icons.folder_open_rounded,
         enabled: false,
       ),
       const _WindowsNavItem('活动记录', Icons.history_rounded, enabled: false),
-      const _WindowsNavItem('设置', Icons.settings_outlined, page: 1),
+      const _WindowsNavItem('设置', Icons.settings_outlined, page: 2),
     ];
 
     return Container(

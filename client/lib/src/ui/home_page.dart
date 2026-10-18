@@ -46,7 +46,9 @@ class _HomePageState extends State<HomePage> {
       _fingerprintController.text = recent.fingerprint;
     } else {
       _addressController.text =
-          Platform.isAndroid ? '' : '127.0.0.1:24800';
+          defaultTargetPlatform == TargetPlatform.android
+              ? ''
+              : '127.0.0.1:24800';
     }
     _addressController.addListener(_onFieldChanged);
     _fingerprintController.addListener(_onFieldChanged);

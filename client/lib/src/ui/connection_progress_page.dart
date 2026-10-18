@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../models/profile.dart';
+import '../models/session_auth.dart';
 import '../net/remote_client.dart';
+import 'design_tokens.dart';
 import 'widgets.dart';
 import 'workspace_page.dart';
 
@@ -12,12 +14,16 @@ class ConnectionProgressPage extends StatefulWidget {
     super.key,
     required this.profile,
     required this.onConnected,
+    this.sessionAuth,
+    this.onRefreshAuth,
     this.inputSelfTest = false,
     this.autoOpenFiles = false,
   });
 
   final ConnectionProfile profile;
   final ValueChanged<ConnectionProfile> onConnected;
+  final SessionAuth? sessionAuth;
+  final Future<SessionAuth?> Function()? onRefreshAuth;
   final bool inputSelfTest;
   final bool autoOpenFiles;
 
@@ -27,7 +33,9 @@ class ConnectionProgressPage extends StatefulWidget {
 
 class _ConnectionProgressPageState extends State<ConnectionProgressPage> {
   late RemoteClient _client;
+  SessionAuth? _auth;
   bool _transferred = false;
+  bool _retrying = false;
 
   static const _stages = <(String, RemotePhase)>[
     ('解析地址', RemotePhase.resolving),
@@ -41,11 +49,16 @@ class _ConnectionProgressPageState extends State<ConnectionProgressPage> {
   @override
   void initState() {
     super.initState();
+    _auth = widget.sessionAuth;
     _startAttempt();
   }
 
   void _startAttempt() {
-    _client = RemoteClient(profile: widget.profile);
+    _client = RemoteClient(
+      profile: widget.profile,
+      sessionTicket: _auth?.ticket,
+      sessionNonce: _auth?.nonce ?? '',
+    );
     _client.addListener(_onClientChanged);
     unawaited(_client.connect());
   }
@@ -76,10 +89,27 @@ class _ConnectionProgressPageState extends State<ConnectionProgressPage> {
     }
   }
 
-  void _retry() {
-    _client.removeListener(_onClientChanged);
-    _client.dispose();
-    setState(_startAttempt);
+  Future<void> _retry() async {
+    if (_retrying) {
+      return;
+    }
+    _retrying = true;
+    try {
+      if (_auth != null && widget.onRefreshAuth != null) {
+        final refreshed = await widget.onRefreshAuth!();
+        if (refreshed == null || !mounted) {
+          return;
+        }
+        _auth = refreshed;
+      }
+      _client.removeListener(_onClientChanged);
+      _client.dispose();
+      if (mounted) {
+        setState(_startAttempt);
+      }
+    } finally {
+      _retrying = false;
+    }
   }
 
   int _stageIndex() {
@@ -135,7 +165,7 @@ class _ConnectionProgressPageState extends State<ConnectionProgressPage> {
                             height: 44,
                             decoration: BoxDecoration(
                               color: connected
-                                  ? const Color(0xFF16A34A).withValues(alpha: 0.14)
+                                  ? YlStatus.success.withValues(alpha: 0.14)
                                   : failed
                                       ? theme.colorScheme.error.withValues(alpha: 0.12)
                                       : theme.colorScheme.primary.withValues(alpha: 0.12),
@@ -148,7 +178,7 @@ class _ConnectionProgressPageState extends State<ConnectionProgressPage> {
                                       ? Icons.error_outline_rounded
                                       : Icons.lock_outline_rounded,
                               color: connected
-                                  ? const Color(0xFF16A34A)
+                                  ? YlStatus.success
                                   : failed
                                       ? theme.colorScheme.error
                                       : theme.colorScheme.primary,
@@ -184,6 +214,44 @@ class _ConnectionProgressPageState extends State<ConnectionProgressPage> {
                               child: CircularProgressIndicator(strokeWidth: 2),
                             ),
                         ],
+                      ),
+                      const SizedBox(height: 14),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 9,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _auth == null
+                              ? YlStatus.warning.withValues(alpha: 0.10)
+                              : YlStatus.success.withValues(alpha: 0.10),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              _auth == null
+                                  ? Icons.warning_amber_rounded
+                                  : Icons.verified_user_outlined,
+                              size: 16,
+                              color: _auth == null
+                                  ? YlStatus.warning
+                                  : YlStatus.success,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _auth == null
+                                    ? '匿名开发直连：没有账号/配对票据，Host 必须显式 --allow-anonymous，且会要求本机确认。'
+                                    : '账号 ${_auth!.account} · 权限 ${_auth!.permissionLabel} · '
+                                        '票据有效至 ${DateTime.fromMillisecondsSinceEpoch(_auth!.expiresAt * 1000).toLocal()}',
+                                style: theme.textTheme.bodySmall,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                       const SizedBox(height: 18),
                       Container(
@@ -306,7 +374,7 @@ class _ConnectionProgressPageState extends State<ConnectionProgressPage> {
       final color = error
           ? theme.colorScheme.error
           : done || (failed && current > i)
-              ? const Color(0xFF16A34A)
+              ? YlStatus.success
               : active
                   ? theme.colorScheme.primary
                   : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5);

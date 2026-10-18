@@ -11,6 +11,8 @@ use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 use anyhow::{bail, Context, Result};
@@ -28,36 +30,43 @@ pub struct FileServer {
     root: PathBuf,
     root_label: String,
     uploads: HashMap<u64, UploadState>,
-    downloads: HashMap<u64, DownloadReader>,
+    downloads: HashMap<u64, Arc<AtomicBool>>,
 }
 
 struct UploadState {
     task_id: u64,
     target: PathBuf,
     temp: PathBuf,
-    file: File,
+    file: Option<File>,
     hasher: Sha256,
     received: u64,
     expected: u64,
     overwrite: bool,
 }
 
+impl Drop for UploadState {
+    fn drop(&mut self) {
+        // Windows refuses to delete a file that still has an open handle, so
+        // close it before removing the temporary file.
+        drop(self.file.take());
+        let _ = fs::remove_file(&self.temp);
+    }
+}
+
 impl Drop for FileServer {
     fn drop(&mut self) {
-        for (_, state) in self.uploads.drain() {
-            drop(state.file);
-            let _ = fs::remove_file(&state.temp);
-        }
+        self.cancel_all_downloads();
     }
 }
 
 pub struct DownloadReader {
     task_id: u64,
     relative_path: String,
-    file: File,
+    file: Option<File>,
     hasher: Sha256,
     offset: u64,
     size: u64,
+    cancel: Arc<AtomicBool>,
 }
 
 impl FileServer {
@@ -153,7 +162,7 @@ impl FileServer {
                 task_id,
                 target,
                 temp,
-                file,
+                file: Some(file),
                 hasher: Sha256::new(),
                 received: 0,
                 expected: size,
@@ -182,7 +191,12 @@ impl FileServer {
         if state.received + data.len() as u64 > state.expected {
             bail!("upload exceeds declared size {}", state.expected);
         }
-        state.file.write_all(data).context("write upload chunk")?;
+        state
+            .file
+            .as_mut()
+            .context("upload file is already closed")?
+            .write_all(data)
+            .context("write upload chunk")?;
         state.hasher.update(data);
         state.received += data.len() as u64;
         Ok(state.received)
@@ -194,30 +208,32 @@ impl FileServer {
             .remove(&task_id)
             .with_context(|| format!("unknown upload task {task_id}"))?;
         if state.received != state.expected {
-            let _ = fs::remove_file(&state.temp);
             bail!(
                 "upload incomplete: received {} of {} bytes",
                 state.received,
                 state.expected
             );
         }
-        state.file.flush().context("flush upload")?;
-        state.file.sync_all().context("sync upload")?;
-        drop(state.file);
-        let digest = state.hasher.finalize();
+        {
+            let file = state
+                .file
+                .as_mut()
+                .context("upload file is already closed")?;
+            file.flush().context("flush upload")?;
+            file.sync_all().context("sync upload")?;
+        }
+        drop(state.file.take());
+        let digest = state.hasher.clone().finalize();
         let hash = hex::encode(digest);
         if state.target.exists() {
             if !state.overwrite {
-                let _ = fs::remove_file(&state.temp);
                 bail!("target already exists");
             }
             if state.target.is_dir() {
-                let _ = fs::remove_file(&state.temp);
                 bail!("target is a directory");
             }
         }
         if let Err(error) = commit_temp(&state.temp, &state.target, state.overwrite) {
-            let _ = fs::remove_file(&state.temp);
             return Err(error).context("commit uploaded file");
         }
         let relative = relative_from_root(&self.root, &state.target);
@@ -225,11 +241,20 @@ impl FileServer {
     }
 
     pub fn cancel_task(&mut self, task_id: u64) {
-        if let Some(state) = self.uploads.remove(&task_id) {
-            drop(state.file);
-            let _ = fs::remove_file(&state.temp);
+        // Dropping the upload state closes the handle and removes the temporary
+        // file on every exit path.
+        self.uploads.remove(&task_id);
+        if let Some(flag) = self.downloads.remove(&task_id) {
+            flag.store(true, Ordering::Relaxed);
         }
-        self.downloads.remove(&task_id);
+    }
+
+    /// Stops every in-flight download, e.g. when the session ends or file
+    /// permission is revoked. A cancelled reader reports a terminal error.
+    pub fn cancel_all_downloads(&mut self) {
+        for (_, flag) in self.downloads.drain() {
+            flag.store(true, Ordering::Relaxed);
+        }
     }
 
     pub fn take_download(&mut self, task_id: u64, relative: &str) -> Result<DownloadReader> {
@@ -239,16 +264,17 @@ impl FileServer {
             bail!("not a regular file: {relative}");
         }
         let file = File::open(&path).context("open download file")?;
-        let reader = DownloadReader {
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.downloads.insert(task_id, cancel.clone());
+        Ok(DownloadReader {
             task_id,
             relative_path: normalize_relative(relative)?,
-            file,
+            file: Some(file),
             hasher: Sha256::new(),
             offset: 0,
             size: metadata.len(),
-        };
-        self.downloads.insert(task_id, reader);
-        Ok(self.downloads.remove(&task_id).expect("just inserted"))
+            cancel,
+        })
     }
 
     fn resolve_existing(&self, relative: &str, want_dir: bool) -> Result<PathBuf> {
@@ -312,7 +338,16 @@ impl DownloadReader {
     pub fn stream(mut self, tx: mpsc::Sender<ServerMessage>) -> Result<()> {
         let mut buffer = vec![0u8; CHUNK_SIZE];
         loop {
-            let read = self.file.read(&mut buffer).context("read download chunk")?;
+            if self.cancel.load(Ordering::Relaxed) {
+                let _ = tx.blocking_send(ServerMessage::FileError {
+                    request_id: 0,
+                    task_id: self.task_id,
+                    message: "下载已取消".into(),
+                });
+                return Ok(());
+            }
+            let file = self.file.as_mut().context("download file is closed")?;
+            let read = file.read(&mut buffer).context("read download chunk")?;
             if read > 0 {
                 self.hasher.update(&buffer[..read]);
                 let chunk = ServerMessage::FileChunk {
@@ -320,6 +355,14 @@ impl DownloadReader {
                     offset: self.offset,
                     data: buffer[..read].to_vec(),
                 };
+                if self.cancel.load(Ordering::Relaxed) {
+                    let _ = tx.blocking_send(ServerMessage::FileError {
+                        request_id: 0,
+                        task_id: self.task_id,
+                        message: "下载已取消".into(),
+                    });
+                    return Ok(());
+                }
                 if tx.blocking_send(chunk).is_err() {
                     return Ok(());
                 }
@@ -329,6 +372,14 @@ impl DownloadReader {
                 }
             }
             if read == 0 {
+                if self.cancel.load(Ordering::Relaxed) {
+                    let _ = tx.blocking_send(ServerMessage::FileError {
+                        request_id: 0,
+                        task_id: self.task_id,
+                        message: "下载已取消".into(),
+                    });
+                    return Ok(());
+                }
                 let hash = hex::encode(self.hasher.finalize());
                 let _ = tx.blocking_send(ServerMessage::FileDone {
                     task_id: self.task_id,
@@ -342,8 +393,9 @@ impl DownloadReader {
     }
 }
 
-/// Atomically replaces an existing file where the platform supports it.
-/// On Windows, MoveFileExW keeps the old file intact if the replace fails.
+/// Commits the temporary upload. With `overwrite=false` the commit itself must
+/// be an atomic no-replace operation; a pre-flight `exists()` check alone
+/// races with other processes creating the target after the check.
 fn commit_temp(temp: &Path, target: &Path, overwrite: bool) -> Result<()> {
     #[cfg(windows)]
     {
@@ -353,28 +405,36 @@ fn commit_temp(temp: &Path, target: &Path, overwrite: bool) -> Result<()> {
             MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MOVE_FILE_FLAGS,
         };
 
-        if target.exists() && !overwrite {
-            bail!("target already exists");
-        }
         let temp_wide: Vec<u16> = temp.as_os_str().encode_wide().chain(Some(0)).collect();
         let target_wide: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
-        let flags = MOVE_FILE_FLAGS(MOVEFILE_REPLACE_EXISTING.0 | MOVEFILE_WRITE_THROUGH.0);
+        let mut bits = MOVEFILE_WRITE_THROUGH.0;
+        if overwrite {
+            bits |= MOVEFILE_REPLACE_EXISTING.0;
+        }
+        // Without REPLACE_EXISTING, MoveFileExW fails if the target appeared
+        // after the pre-flight check; it never silently replaces it.
         unsafe {
             MoveFileExW(
                 PCWSTR(temp_wide.as_ptr()),
                 PCWSTR(target_wide.as_ptr()),
-                flags,
+                MOVE_FILE_FLAGS(bits),
             )
-            .context("atomic MoveFileExW replace")?;
+            .context("atomic MoveFileExW commit")?;
         }
         Ok(())
     }
     #[cfg(not(windows))]
     {
-        if target.exists() && !overwrite {
-            bail!("target already exists");
+        if overwrite {
+            return fs::rename(temp, target).context("atomic rename");
         }
-        fs::rename(temp, target).context("atomic rename")
+        // link(2) fails with EEXIST instead of replacing; the target name is
+        // then fully populated before it becomes visible.
+        fs::hard_link(temp, target).context("atomic no-replace link")?;
+        if let Err(error) = fs::remove_file(temp) {
+            warn!(%error, "commit succeeded but temporary upload file remains");
+        }
+        Ok(())
     }
 }
 
@@ -511,5 +571,83 @@ mod tests {
         server.write_upload_chunk(3, 0, b"a").unwrap();
         server.cancel_task(3);
         assert!(!dir.path().join(".yuanlian-upload-3.part").exists());
+    }
+
+    #[test]
+    fn no_overwrite_rejects_target_created_after_begin() {
+        let (dir, mut server) = server_with(&[]);
+        server.begin_upload(11, "race.txt", 3, false).unwrap();
+        // Another process creates the target between the pre-flight check and
+        // the commit. The commit must fail and leave the new file untouched.
+        fs::write(dir.path().join("race.txt"), b"theirs").unwrap();
+        server.write_upload_chunk(11, 0, b"new").unwrap();
+        assert!(server.finish_upload(11).is_err());
+        assert_eq!(fs::read(dir.path().join("race.txt")).unwrap(), b"theirs");
+        assert!(!dir.path().join(".yuanlian-upload-11.part").exists());
+    }
+
+    #[test]
+    #[allow(clippy::permissions_set_readonly_false)]
+    fn failed_overwrite_keeps_old_file_and_cleans_temp() {
+        let (dir, mut server) = server_with(&[("keep.txt", b"old")]);
+        server.begin_upload(12, "keep.txt", 3, true).unwrap();
+        server.write_upload_chunk(12, 0, b"new").unwrap();
+        // A read-only target makes the atomic replace fail. The old file must
+        // still contain its original bytes and no .part file may be left.
+        let target = dir.path().join("keep.txt");
+        let mut permissions = fs::metadata(&target).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&target, permissions).unwrap();
+        let result = server.finish_upload(12);
+        #[cfg(windows)]
+        {
+            let mut permissions = fs::metadata(&target).unwrap().permissions();
+            permissions.set_readonly(false);
+            fs::set_permissions(&target, permissions).unwrap();
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        assert!(result.is_err(), "replace unexpectedly succeeded");
+        assert_eq!(fs::read(&target).unwrap(), b"old");
+        assert!(!dir.path().join(".yuanlian-upload-12.part").exists());
+    }
+
+    #[test]
+    fn incomplete_upload_failure_removes_temp() {
+        let (dir, mut server) = server_with(&[]);
+        server.begin_upload(13, "short.bin", 10, false).unwrap();
+        server.write_upload_chunk(13, 0, b"abc").unwrap();
+        assert!(server.finish_upload(13).is_err());
+        assert!(!dir.path().join(".yuanlian-upload-13.part").exists());
+        assert!(!dir.path().join("short.bin").exists());
+    }
+
+    #[test]
+    fn cancelled_download_has_terminal_error_and_no_done() {
+        let payload = vec![0x5Au8; CHUNK_SIZE * 2];
+        let (_dir, mut server) = server_with(&[("big.bin", &payload)]);
+        let reader = server.take_download(21, "big.bin").unwrap();
+        server.cancel_task(21);
+        let (tx, mut rx) = mpsc::channel::<ServerMessage>(8);
+        reader.stream(tx).unwrap();
+        let mut messages = Vec::new();
+        while let Ok(message) = rx.try_recv() {
+            messages.push(message);
+        }
+        assert!(
+            messages
+                .iter()
+                .any(|message| matches!(message, ServerMessage::FileError { task_id: 21, .. })),
+            "cancelled download must report a terminal error: {messages:?}"
+        );
+        assert!(
+            !messages
+                .iter()
+                .any(|message| matches!(message, ServerMessage::FileDone { .. })),
+            "cancelled download must not report success"
+        );
     }
 }

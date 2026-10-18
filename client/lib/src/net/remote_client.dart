@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/profile.dart';
 import 'bincode.dart';
+import 'frame_queue.dart';
 import 'protocol.dart';
 
 enum RemotePhase {
@@ -101,10 +102,16 @@ class RemoteClient extends ChangeNotifier {
   RemoteClient({
     required this.profile,
     String? clientName,
+    this.sessionTicket,
+    this.sessionNonce = '',
+    this.features = featureFileTransfer | featureTextInput | featureSessionTicket,
   }) : clientName = clientName ?? 'YuanLian Flutter';
 
   final ConnectionProfile profile;
   final String clientName;
+  final String? sessionTicket;
+  final String sessionNonce;
+  final int features;
 
   final StreamController<RemoteEvent> _events =
       StreamController<RemoteEvent>.broadcast();
@@ -117,7 +124,16 @@ class RemoteClient extends ChangeNotifier {
   String? errorMessage;
   bool inputAllowed = false;
   bool fileEnabled = false;
+  bool fileRead = false;
+  bool fileWrite = false;
+  bool fileDelete = false;
   String fileRootLabel = '';
+  bool authenticated = false;
+  String account = '';
+  int permissions = 0;
+  String authMode = '';
+  String sessionId = '';
+  int ticketExpiresAt = 0;
 
   int framesReceived = 0;
   int bytesReceived = 0;
@@ -245,6 +261,9 @@ class RemoteClient extends ChangeNotifier {
         clientName: clientName,
         clientId: 'flutter-${_safeHostname()}-$pid',
         requestInput: true,
+        features: features,
+        sessionTicket: sessionTicket,
+        sessionNonce: sessionNonce,
       ),
     );
     _heartbeat = Timer.periodic(const Duration(seconds: 5), (_) => _heartbeatTick());
@@ -255,6 +274,17 @@ class RemoteClient extends ChangeNotifier {
     errorMessage = null;
     welcome = null;
     inputAllowed = false;
+    fileEnabled = false;
+    fileRead = false;
+    fileWrite = false;
+    fileDelete = false;
+    fileRootLabel = '';
+    authenticated = false;
+    account = '';
+    permissions = 0;
+    authMode = '';
+    sessionId = '';
+    ticketExpiresAt = 0;
     framesReceived = 0;
     bytesReceived = 0;
     rttMs = 0;
@@ -353,6 +383,12 @@ class RemoteClient extends ChangeNotifier {
         }
         this.welcome = welcome;
         inputAllowed = welcome.inputAllowed;
+        authenticated = welcome.authenticated;
+        account = welcome.account;
+        permissions = welcome.permissions;
+        authMode = welcome.authMode;
+        sessionId = welcome.sessionId;
+        ticketExpiresAt = welcome.ticketExpiresAt;
         _setPhase(RemotePhase.waitingFirstFrame);
         _firstFrameTimeout?.cancel();
         _firstFrameTimeout = Timer(const Duration(seconds: 15), () {
@@ -363,7 +399,9 @@ class RemoteClient extends ChangeNotifier {
       case FrameReceived(:final frame):
         framesReceived += 1;
         bytesReceived += frame.encodedBytes;
-        if (phase == RemotePhase.waitingFirstFrame) {
+        if (phase == RemotePhase.waitingFirstFrame &&
+            frame.full &&
+            validateFrame(frame).isValid) {
           _firstFrameTimeout?.cancel();
           _setPhase(RemotePhase.ready);
         }
@@ -385,15 +423,31 @@ class RemoteClient extends ChangeNotifier {
           inputAllowed = false;
           notifyListeners();
         }
+        if (phase != RemotePhase.ready &&
+            (code == ErrorCode.unauthorized ||
+                code == ErrorCode.ticketExpired ||
+                code == ErrorCode.ticketReplay ||
+                code == ErrorCode.permissionDenied ||
+                code == ErrorCode.revoked ||
+                code == ErrorCode.screenUnavailable)) {
+          _fail(message, code: code.wireName);
+          return;
+        }
         if (!_events.isClosed) {
           _events.add(HostErrorEvent(code, message));
         }
-        if (code == ErrorCode.screenUnavailable && phase != RemotePhase.ready) {
-          _fail(message, code: code.wireName);
-        }
-      case FileCapabilitiesReceived(:final enabled, :final rootLabel):
+      case FileCapabilitiesReceived(
+          :final enabled,
+          :final rootLabel,
+          :final read,
+          :final write,
+          :final delete,
+        ):
         fileEnabled = enabled;
         fileRootLabel = rootLabel;
+        fileRead = read;
+        fileWrite = write;
+        fileDelete = delete;
         notifyListeners();
       case DirListingReceived(:final requestId, :final path, :final entries):
         if (!_events.isClosed) {

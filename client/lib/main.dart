@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'src/models/profile.dart';
+import 'src/models/session_auth.dart';
 import 'src/ui/home_shell.dart';
 import 'src/ui/theme.dart';
 
@@ -27,6 +28,8 @@ Future<void> main(List<String> args) async {
   String? name = buildName.isEmpty ? null : buildName;
   var inputSelfTest = const bool.fromEnvironment('YUANLIAN_INPUT_SELF_TEST');
   var autoOpenFiles = buildOpenFiles;
+  String? ticket;
+  String nonce = '';
   for (var i = 0; i < args.length; i++) {
     switch (args[i]) {
       case '--auto-connect-address':
@@ -41,6 +44,14 @@ Future<void> main(List<String> args) async {
         if (i + 1 < args.length) {
           name = args[++i];
         }
+      case '--auto-connect-ticket':
+        if (i + 1 < args.length) {
+          ticket = args[++i];
+        }
+      case '--auto-connect-nonce':
+        if (i + 1 < args.length) {
+          nonce = args[++i];
+        }
       case '--input-self-test':
         inputSelfTest = true;
       case '--auto-open-files':
@@ -54,10 +65,21 @@ Future<void> main(List<String> args) async {
           fingerprint: fingerprint.toUpperCase(),
         )
       : null;
+  final initialAuth = ticket == null
+      ? null
+      : SessionAuth(
+          ticket: ticket,
+          nonce: nonce,
+          sessionId: 'auto',
+          account: '票据自动连接',
+          permissions: 0,
+          expiresAt: 0,
+        );
   runApp(
     YuanLianApp(
       initialThemeMode: themeMode,
       initialConnection: initialConnection,
+      initialSessionAuth: initialAuth,
       inputSelfTest: inputSelfTest,
       autoOpenFiles: autoOpenFiles,
     ),
@@ -69,11 +91,13 @@ class YuanLianApp extends StatefulWidget {
     super.key,
     required this.initialThemeMode,
     this.initialConnection,
+    this.initialSessionAuth,
     this.inputSelfTest = false,
     this.autoOpenFiles = false,
   });
   final ThemeMode initialThemeMode;
   final ConnectionProfile? initialConnection;
+  final SessionAuth? initialSessionAuth;
   final bool inputSelfTest;
   final bool autoOpenFiles;
 
@@ -130,6 +154,7 @@ class _YuanLianAppState extends State<YuanLianApp> {
         themeMode: _themeMode,
         onThemeModeChanged: _setThemeMode,
         initialConnection: widget.initialConnection,
+        initialSessionAuth: widget.initialSessionAuth,
         inputSelfTest: widget.inputSelfTest,
         autoOpenFiles: widget.autoOpenFiles,
       ),

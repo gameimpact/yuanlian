@@ -142,7 +142,7 @@ impl InputInjector {
                 self.pressed_keys.remove(&(vk, recorded_extended));
                 send_key(vk, down, recorded_extended)
             } else {
-                debug!(vk, "ignoring key-up for a key we never pressed");
+                debug!("ignoring key-up for a key we never pressed");
                 Ok(())
             }
         }
@@ -171,7 +171,7 @@ impl InputInjector {
     pub fn release_all(&mut self) {
         for (vk, extended) in self.pressed_keys.drain() {
             if let Err(error) = send_key(vk, false, extended) {
-                warn!(%error, vk, "failed to release key");
+                warn!(%error, "failed to release a held key");
             }
         }
         let buttons: Vec<u8> = self.pressed_buttons.drain().collect();
@@ -185,7 +185,7 @@ impl InputInjector {
                 _ => continue,
             };
             if let Err(error) = send_mouse(up_flag, 0, 0, data) {
-                warn!(%error, code, "failed to release mouse button");
+                warn!(%error, "failed to release a held mouse button");
             }
         }
     }
