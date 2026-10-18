@@ -1,0 +1,19 @@
+[package]
+name = "yl-viewer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+yl-proto = { path = "../yl-proto" }
+anyhow.workspace = true
+clap.workspace = true
+image.workspace = true
+minifb.workspace = true
+rustls.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+windows.workspace = true

@@ -1,0 +1,25 @@
+[package]
+name = "yl-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+yl-proto = { path = "../yl-proto" }
+yl-tiles = { path = "../yl-tiles" }
+anyhow.workspace = true
+clap.workspace = true
+image.workspace = true
+rcgen.workspace = true
+rustls.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+xcap.workspace = true
+windows.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

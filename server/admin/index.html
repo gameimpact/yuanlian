@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>远联控制台</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f3f4f6; --surface:#fff; --text:#111827; --muted:#6b7280; --border:#e5e7eb; --primary:#1d4ed8; --danger:#b91c1c; --ok:#15803d; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#18191c; --surface:#232529; --text:#e5e7eb; --muted:#9ca3af; --border:#363a40; --primary:#60a5fa; --danger:#f87171; --ok:#4ade80; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 "Segoe UI", "Microsoft YaHei UI", sans-serif; background:var(--bg); color:var(--text); }
+  header { height:52px; display:flex; align-items:center; gap:12px; padding:0 20px; background:var(--surface); border-bottom:1px solid var(--border); }
+  .logo { width:26px; height:26px; border-radius:6px; background:var(--primary); color:#fff; display:grid; place-items:center; font-weight:700; }
+  .brand { font-weight:600; }
+  .spacer { flex:1; }
+  .muted { color:var(--muted); }
+  main { max-width:1100px; margin:24px auto; padding:0 20px; display:grid; gap:16px; }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:16px; }
+  .card h2 { margin:0 0 12px; font-size:15px; font-weight:600; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:8px 0 4px; }
+  input, select { width:100%; height:34px; padding:6px 9px; border:1px solid var(--border); border-radius:5px; background:var(--surface); color:var(--text); font:inherit; }
+  button { height:34px; padding:0 14px; border:1px solid var(--border); border-radius:5px; background:var(--surface); color:var(--text); font:inherit; cursor:pointer; }
+  button.primary { background:var(--primary); border-color:var(--primary); color:#fff; }
+  button.danger { color:var(--danger); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .error { background:color-mix(in srgb, var(--danger) 12%, transparent); border:1px solid color-mix(in srgb, var(--danger) 35%, transparent); color:var(--danger); padding:9px 12px; border-radius:5px; white-space:pre-wrap; }
+  .ok { color:var(--ok); }
+  .code { font:12px/1.5 Consolas, monospace; background:var(--bg); border:1px dashed var(--border); padding:6px 8px; border-radius:5px; word-break:break-all; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { padding:7px 8px; border-bottom:1px solid var(--border); text-align:left; vertical-align:top; }
+  th { color:var(--muted); font-weight:500; }
+  .pill { padding:2px 7px; border-radius:999px; background:var(--bg); border:1px solid var(--border); font-size:12px; }
+  .hidden { display:none !important; }
+  .note { font-size:12px; color:var(--muted); margin-top:6px; }
+</style>
+</head>
+<body>
+<header><div class="logo">远</div><div class="brand">远联控制台</div><div class="spacer"></div><div id="serverName" class="muted"></div><button id="logout" class="hidden" onclick="logout()">退出</button></header>
+<main>
+  <div id="msg" class="error hidden"></div>
+
+  <section id="setup" class="card hidden">
+    <h2>首次初始化</h2>
+    <p class="muted">仅允许从服务器本机/SSH 隧道访问。创建第一个管理员后此入口会关闭。</p>
+    <div class="grid">
+      <div><label>管理员用户名</label><input id="setupUser" autocomplete="username"></div>
+      <div><label>密码（至少 10 位）</label><input id="setupPass" type="password" autocomplete="new-password"></div>
+      <div><label>服务器名称</label><input id="serverNameInput" value="远联内网服务器"></div>
+    </div>
+    <div class="row" style="margin-top:12px"><button class="primary" onclick="doSetup()">创建管理员</button></div>
+  </section>
+
+  <section id="login" class="card hidden">
+    <h2>管理员登录</h2>
+    <div class="grid">
+      <div><label>用户名</label><input id="loginUser" autocomplete="username"></div>
+      <div><label>密码</label><input id="loginPass" type="password" autocomplete="current-password"></div>
+    </div>
+    <div class="row" style="margin-top:12px"><button class="primary" onclick="doLogin()">登录</button></div>
+    <div class="note">没有账号？使用管理员提供的邀请码注册。开放注册默认关闭。</div>
+    <div class="row" style="margin-top:8px"><button onclick="show('register', true); show('login', false)">使用邀请码注册</button></div>
+  </section>
+
+  <section id="register" class="card hidden">
+    <h2>邀请码注册</h2>
+    <div class="grid">
+      <div><label>邀请码</label><input id="regInvite" autocomplete="off"></div>
+      <div><label>用户名</label><input id="regUser" autocomplete="username"></div>
+      <div><label>密码（至少 10 位）</label><input id="regPass" type="password" autocomplete="new-password"></div>
+    </div>
+    <div class="row" style="margin-top:12px"><button class="primary" onclick="doRegister()">注册并登录</button><button onclick="show('register', false); show('login', true)">返回登录</button></div>
+  </section>
+
+  <div id="app" class="hidden">
+    <section class="card">
+      <div class="row"><strong id="who"></strong><span id="role" class="pill"></span><div class="spacer"></div><span id="health" class="muted"></span></div>
+      <div class="note">本服务只保存账号/设备/配对元数据，不转发屏幕、输入或文件内容；请通过反向代理提供 HTTPS。</div>
+    </section>
+
+    <section class="card">
+      <h2>账号安全</h2>
+      <div class="grid">
+        <div><label>当前密码</label><input id="curPass" type="password" autocomplete="current-password"></div>
+        <div><label>新密码（至少 10 位）</label><input id="newPass" type="password" autocomplete="new-password"></div>
+      </div>
+      <div class="row" style="margin-top:12px"><button onclick="changePassword()">修改密码</button><span class="note">修改后所有会话会失效，需要重新登录。</span></div>
+    </section>
+
+    <section class="card">
+      <h2>我的设备</h2>
+      <div id="devices"></div>
+      <h2 style="margin-top:16px">添加/更新设备</h2>
+      <div class="grid">
+        <div><label>名称</label><input id="devName" placeholder="办公室主机"></div>
+        <div><label>平台</label><input id="devPlatform" placeholder="windows / linux"></div>
+        <div><label>可连接地址</label><input id="devAddress" placeholder="192.168.9.66:24800"></div>
+        <div><label>TLS SHA-256 指纹</label><input id="devFingerprint" placeholder="64 位十六进制，可带冒号"></div>
+      </div>
+      <div class="row" style="margin-top:12px"><button class="primary" onclick="addDevice()">保存设备</button></div>
+      <div id="deviceToken" class="hidden" style="margin-top:10px"><div class="note">设备令牌只显示一次，交给 Host 代理使用：</div><div class="code" id="deviceTokenValue"></div></div>
+    </section>
+
+    <section id="adminUsers" class="card hidden">
+      <h2>用户与角色</h2>
+      <div id="users"></div>
+      <h2 style="margin-top:16px">创建邀请码</h2>
+      <div class="grid">
+        <div><label>角色</label><select id="inviteRole"><option value="user">普通用户</option><option value="admin">管理员</option></select></div>
+        <div><label>最大使用次数</label><input id="inviteUses" type="number" min="1" max="100" value="1"></div>
+        <div><label>有效期（小时）</label><input id="inviteTtl" type="number" min="1" max="720" value="24"></div>
+      </div>
+      <div class="row" style="margin-top:12px"><button class="primary" onclick="createInvite()">生成邀请码</button></div>
+      <div id="inviteResult" class="hidden" style="margin-top:10px"></div>
+    </section>
+
+    <section id="adminAudit" class="card hidden">
+      <h2>审计事件（最近 200 条）</h2>
+      <div id="audit"></div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const show = (id, yes=true) => $(id).classList.toggle('hidden', !yes);
+let token = sessionStorage.getItem('yl_token') || '';
+let me = null;
+let info = null;
+let devices = [];
+
+function message(text, ok=false) {
+  const el = $('msg');
+  el.textContent = text || '';
+  el.classList.toggle('hidden', !text);
+  el.classList.toggle('error', !ok);
+  el.classList.toggle('ok', ok);
+}
+
+async function api(path, options={}) {
+  const headers = Object.assign({'Content-Type':'application/json'}, options.headers || {});
+  if (token) headers.Authorization = 'Bearer ' + token;
+  const res = await fetch(path, Object.assign({}, options, {headers}));
+  let data = {};
+  try { data = await res.json(); } catch (_) {}
+  if (!res.ok) {
+    if (res.status === 401) { clearSession(); }
+    throw new Error((data.error && data.error.message) || ('HTTP ' + res.status));
+  }
+  return data;
+}
+
+function clearSession() {
+  token = ''; me = null;
+  sessionStorage.removeItem('yl_token');
+  show('app', false); show('login', true); show('setup', false); show('register', false);
+  $('logout').classList.add('hidden');
+}
+
+async function init() {
+  try {
+    info = await api('/api/v1/server/info');
+    $('serverName').textContent = info.name + ' · v' + info.version;
+    show('setup', !info.initialized);
+    show('login', info.initialized);
+    if (!info.initialized) return;
+    if (!token) return;
+    me = (await api('/api/v1/me')).user;
+    await showApp();
+  } catch (e) { message(e.message); }
+}
+
+async function doSetup() {
+  try {
+    const data = await api('/api/v1/setup', {method:'POST', body: JSON.stringify({
+      username: $('setupUser').value.trim(),
+      password: $('setupPass').value,
+      server_name: $('serverNameInput').value.trim()
+    })});
+    token = data.token; sessionStorage.setItem('yl_token', token); me = data.user;
+    await init(); await showApp();
+    message('管理员已创建，请妥善保存密码并配置 HTTPS。', true);
+  } catch (e) { message(e.message); }
+}
+
+async function doLogin() {
+  try {
+    const data = await api('/api/v1/auth/login', {method:'POST', body: JSON.stringify({
+      username: $('loginUser').value.trim(), password: $('loginPass').value
+    })});
+    token = data.token; sessionStorage.setItem('yl_token', token); me = data.user;
+    $('loginPass').value = '';
+    await showApp();
+  } catch (e) { message(e.message); }
+}
+
+async function doRegister() {
+  try {
+    const data = await api('/api/v1/auth/register', {method:'POST', body: JSON.stringify({
+      invite_code: $('regInvite').value.trim(), username: $('regUser').value.trim(), password: $('regPass').value
+    })});
+    token = data.token; sessionStorage.setItem('yl_token', token); me = data.user;
+    await showApp();
+    message('注册成功。', true);
+  } catch (e) { message(e.message); }
+}
+
+async function changePassword() {
+  try {
+    await api('/api/v1/auth/password', {method:'POST', body: JSON.stringify({
+      current_password: $('curPass').value, new_password: $('newPass').value
+    })});
+    $('curPass').value = ''; $('newPass').value = '';
+    clearSession();
+    message('密码已修改，请重新登录。', true);
+  } catch (e) { message(e.message); }
+}
+
+async function logout() {
+  try { await api('/api/v1/auth/logout', {method:'POST', body:'{}'}); } catch (_) {}
+  clearSession(); message('已退出。', true);
+}
+
+async function showApp() {
+  show('login', false); show('setup', false); show('app', true); $('logout').classList.remove('hidden');
+  $('who').textContent = me.username + ' (' + me.id + ')';
+  $('role').textContent = me.role === 'admin' ? '管理员' : '普通用户';
+  show('adminUsers', me.role === 'admin');
+  show('adminAudit', me.role === 'admin');
+  $('health').textContent = '服务在线 · ' + info.name;
+  await Promise.all([loadDevices(), me.role === 'admin' ? loadUsers() : null, me.role === 'admin' ? loadAudit() : null]);
+}
+
+async function loadDevices() {
+  const data = await api('/api/v1/devices'); devices = data.devices || [];
+  if (!devices.length) { $('devices').innerHTML = '<div class="muted">还没有设备。使用上方表单登记 Host 的地址与指纹。</div>'; return; }
+  $('devices').innerHTML = '<table><thead><tr><th>名称</th><th>ID</th><th>归属</th><th>平台</th><th>状态</th><th>地址</th><th>操作</th></tr></thead><tbody>' +
+    devices.map(d => '<tr><td>'+esc(d.name)+'</td><td class="code">'+esc(d.device_id)+'</td><td>'+esc(d.owner)+'</td><td>'+esc(d.platform)+'</td><td><span class="pill">'+esc(d.status)+'</span></td><td>'+esc(d.address)+'</td><td class="row">' +
+      (d.owner_id === me.id || me.role === 'admin' ? '<button onclick="pairing(\''+esc(d.device_id)+'\')">配对码</button><button class="danger" onclick="revoke(\''+esc(d.device_id)+'\')">撤销</button>' : '') +
+      '</td></tr>').join('') + '</tbody></table>';
+}
+
+async function addDevice() {
+  try {
+    const data = await api('/api/v1/devices', {method:'POST', body: JSON.stringify({
+      name: $('devName').value.trim(), platform: $('devPlatform').value.trim(),
+      address: $('devAddress').value.trim(), fingerprint: $('devFingerprint').value.trim()
+    })});
+    $('deviceTokenValue').textContent = data.device_token;
+    show('deviceToken', true);
+    message('设备已保存。配对码请在设备列表中生成。', true);
+    await loadDevices();
+  } catch (e) { message(e.message); }
+}
+
+async function pairing(deviceId) {
+  try {
+    const data = await api('/api/v1/devices/'+encodeURIComponent(deviceId)+'/pairing-code', {method:'POST', body:'{}'});
+    message('配对码：' + data.code + '（10 分钟内有效，一次性）', true);
+  } catch (e) { message(e.message); }
+}
+
+async function revoke(deviceId) {
+  if (!confirm('撤销该设备的信任？Host 端仍需停止会话以完全断开。')) return;
+  try { await api('/api/v1/devices/'+encodeURIComponent(deviceId)+'/revoke', {method:'POST', body:'{}'}); await loadDevices(); message('设备已撤销。', true); }
+  catch (e) { message(e.message); }
+}
+
+async function loadUsers() {
+  const data = await api('/api/v1/users');
+  $('users').innerHTML = '<table><thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody>' +
+    data.users.map(u => '<tr><td>'+u.id+'</td><td>'+esc(u.username)+'</td><td>'+esc(u.role)+'</td><td>'+esc(u.status)+'</td><td>'+new Date(u.created_at*1000).toLocaleString()+'</td><td>' +
+      (u.id === me.id ? '<span class="muted">当前账号</span>' : '<button onclick="setStatus('+u.id+',\''+(u.status==='active'?'disabled':'active')+'\')">'+(u.status==='active'?'停用':'恢复')+'</button>') +
+      '</td></tr>').join('') + '</tbody></table>';
+}
+
+async function setStatus(id, status) {
+  try { await api('/api/v1/users/'+id+'/status', {method:'POST', body: JSON.stringify({status})}); await loadUsers(); await loadDevices(); message('用户状态已更新。', true); }
+  catch (e) { message(e.message); }
+}
+
+async function createInvite() {
+  try {
+    const data = await api('/api/v1/invites', {method:'POST', body: JSON.stringify({
+      role: $('inviteRole').value, max_uses: Number($('inviteUses').value) || 1, ttl_hours: Number($('inviteTtl').value) || 24
+    })});
+    $('inviteResult').innerHTML = '<div class="note">邀请码（复制给用户，过期/次数用尽后失效）：</div><div class="code">'+esc(data.code)+'</div>';
+    show('inviteResult', true);
+  } catch (e) { message(e.message); }
+}
+
+async function loadAudit() {
+  const data = await api('/api/v1/audit');
+  $('audit').innerHTML = '<table><thead><tr><th>时间</th><th>操作</th><th>对象</th><th>详情</th></tr></thead><tbody>' +
+    data.audit.map(a => '<tr><td>'+new Date(a.created_at*1000).toLocaleString()+'</td><td>'+esc(a.action)+'</td><td class="code">'+esc(a.target||'')+'</td><td>'+esc(a.detail||'')+'</td></tr>').join('') + '</tbody></table>';
+}
+
+init();
+</script>
+</body>
+</html>

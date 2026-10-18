@@ -1,0 +1,10 @@
+/target/
+/artifacts/
+*.log
+capture-test.*
+viewer-screen.png
+.DS_Store
+
+/dist/
+/server/yl-server
+/server/target/

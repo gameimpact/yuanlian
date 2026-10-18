@@ -1,0 +1,327 @@
+//! Wire protocol shared by the Host and viewers.
+//!
+//! Frames on the wire are `u32 big-endian payload length || bincode(payload)`.
+//! TLS with ALPN `yuanlian/1` is the transport. See `docs/protocol.md`.
+
+use anyhow::{bail, Context, Result};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+
+pub const PROTOCOL_VERSION: u16 = 1;
+pub const ALPN: &[u8] = b"yuanlian/1";
+pub const MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
+pub const DEFAULT_PORT: u16 = 24_800;
+pub const TLS_SERVER_NAME: &str = "yuanlian.local";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClientHello {
+    pub protocol_version: u16,
+    pub client_name: String,
+    pub client_id: String,
+    /// The viewer intends to send keyboard/mouse input. The Host still decides.
+    pub request_input: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Welcome {
+    pub protocol_version: u16,
+    pub host_id: String,
+    pub host_name: String,
+    pub screen_width: u32,
+    pub screen_height: u32,
+    pub input_allowed: bool,
+    pub mode: String,
+    pub tile_size: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ClientMessage {
+    Hello(ClientHello),
+    Input(InputEvent),
+    RequestKeyframe,
+    Ping {
+        nonce: u64,
+    },
+    Bye,
+    FileList {
+        request_id: u64,
+        path: String,
+    },
+    FileDownload {
+        task_id: u64,
+        path: String,
+    },
+    FileUploadStart {
+        task_id: u64,
+        path: String,
+        size: u64,
+        overwrite: bool,
+    },
+    FileUploadChunk {
+        task_id: u64,
+        offset: u64,
+        data: Vec<u8>,
+    },
+    FileUploadFinish {
+        task_id: u64,
+    },
+    FileCancel {
+        task_id: u64,
+    },
+    TextInput {
+        text: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FileEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub modified_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ServerMessage {
+    Welcome(Welcome),
+    Frame(FrameMessage),
+    Cursor(CursorState),
+    Pong {
+        nonce: u64,
+    },
+    Error {
+        code: ErrorCode,
+        message: String,
+    },
+    Bye {
+        reason: String,
+    },
+    FileCapabilities {
+        enabled: bool,
+        root_label: String,
+    },
+    DirListing {
+        request_id: u64,
+        path: String,
+        entries: Vec<FileEntry>,
+    },
+    FileChunk {
+        task_id: u64,
+        offset: u64,
+        data: Vec<u8>,
+    },
+    FileUploadAck {
+        task_id: u64,
+        received: u64,
+    },
+    FileDone {
+        task_id: u64,
+        path: String,
+        size: u64,
+        sha256: String,
+    },
+    FileError {
+        request_id: u64,
+        task_id: u64,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FrameMessage {
+    /// Monotonic frame sequence within a connection.
+    pub seq: u64,
+    /// Increments whenever the capture source or geometry changes.
+    pub screen_generation: u32,
+    /// True means `tiles` contains the whole screen; the viewer must clear first.
+    pub full: bool,
+    pub width: u32,
+    pub height: u32,
+    pub tiles: Vec<TileMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TileMessage {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    /// JPEG baseline, RGB, quality decided by the Host.
+    pub jpeg: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CursorState {
+    pub x: i32,
+    pub y: i32,
+    pub visible: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum InputEvent {
+    MouseMove {
+        x: i32,
+        y: i32,
+    },
+    MouseButton {
+        button: MouseButton,
+        down: bool,
+    },
+    Wheel {
+        vertical: i32,
+        horizontal: i32,
+    },
+    Key {
+        vk: u16,
+        down: bool,
+        extended: bool,
+    },
+    /// Sent on focus loss, disconnect and viewer shutdown.
+    ReleaseAll,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+    Back,
+    Forward,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ErrorCode {
+    ProtocolVersion,
+    BadMessage,
+    InputDenied,
+    ScreenUnavailable,
+    Internal,
+    Busy,
+}
+
+impl ErrorCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ProtocolVersion => "protocol_version",
+            Self::BadMessage => "bad_message",
+            Self::InputDenied => "input_denied",
+            Self::ScreenUnavailable => "screen_unavailable",
+            Self::Internal => "internal",
+            Self::Busy => "busy",
+        }
+    }
+}
+
+/// SHA-256 fingerprint of a DER certificate, uppercase hex without separators.
+pub fn cert_fingerprint_hex(der: &[u8]) -> String {
+    let digest = Sha256::digest(der);
+    hex::encode_upper(digest)
+}
+
+/// Accepts `AA:BB:..`, lowercase, spaces and `sha256:` prefixes.
+pub fn parse_fingerprint(input: &str) -> Result<[u8; 32]> {
+    let cleaned: String = input
+        .trim()
+        .strip_prefix("sha256:")
+        .unwrap_or(input.trim())
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect();
+    if cleaned.len() != 64 {
+        bail!(
+            "fingerprint must contain 64 hex digits, got {}",
+            cleaned.len()
+        );
+    }
+    let mut out = [0u8; 32];
+    hex::decode_to_slice(cleaned, &mut out).context("invalid hex fingerprint")?;
+    Ok(out)
+}
+
+pub fn format_fingerprint(raw: &[u8; 32]) -> String {
+    hex::encode_upper(raw)
+}
+
+pub async fn write_message<W, T>(writer: &mut W, message: &T) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+    T: Serialize,
+{
+    let payload = bincode::serialize(message).context("serialize message")?;
+    if payload.len() > MAX_MESSAGE_BYTES {
+        bail!("message too large: {} bytes", payload.len());
+    }
+    writer
+        .write_all(&(payload.len() as u32).to_be_bytes())
+        .await?;
+    writer.write_all(&payload).await?;
+    writer.flush().await?;
+    Ok(())
+}
+
+/// Reads one message. Returns `Ok(None)` for a clean EOF before a new frame.
+pub async fn read_message<R, T>(reader: &mut R) -> Result<Option<T>>
+where
+    R: AsyncRead + Unpin,
+    T: DeserializeOwned,
+{
+    let mut length = [0u8; 4];
+    match reader.read_exact(&mut length).await {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => return Ok(None),
+        Err(e) => return Err(e.into()),
+    }
+    let length = u32::from_be_bytes(length) as usize;
+    if length == 0 || length > MAX_MESSAGE_BYTES {
+        bail!("invalid message length: {length}");
+    }
+    let mut payload = vec![0u8; length];
+    reader.read_exact(&mut payload).await?;
+    let message = bincode::deserialize(&payload).context("deserialize message")?;
+    Ok(Some(message))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn fingerprint_roundtrip_and_lenient_parse() {
+        let raw = [0xABu8; 32];
+        let text = format_fingerprint(&raw);
+        assert_eq!(parse_fingerprint(&text).unwrap(), raw);
+        let grouped = (0..32).map(|_| "aa").collect::<Vec<_>>().join(":");
+        assert_eq!(parse_fingerprint(&grouped).unwrap(), [0xAA; 32]);
+        assert!(parse_fingerprint("abc").is_err());
+    }
+
+    #[tokio::test]
+    async fn framed_roundtrip() {
+        let message = ServerMessage::Welcome(Welcome {
+            protocol_version: PROTOCOL_VERSION,
+            host_id: "host-1".into(),
+            host_name: "测试主机".into(),
+            screen_width: 1920,
+            screen_height: 1080,
+            input_allowed: true,
+            mode: "tiles".into(),
+            tile_size: 128,
+        });
+        let mut buf = Vec::new();
+        write_message(&mut buf, &message).await.unwrap();
+        let mut cursor = Cursor::new(buf);
+        let decoded: Option<ServerMessage> = read_message(&mut cursor).await.unwrap();
+        assert_eq!(decoded.unwrap(), message);
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_length() {
+        let mut cursor = Cursor::new((MAX_MESSAGE_BYTES as u32 + 1).to_be_bytes().to_vec());
+        let result: Result<Option<ServerMessage>> = read_message(&mut cursor).await;
+        assert!(result.is_err());
+    }
+}
