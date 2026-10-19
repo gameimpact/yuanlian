@@ -4,8 +4,15 @@
 
 | 需求 | 状态 | 实现文件与测试环境/结果 | 剩余问题 |
 |---|---|---|---|
-| `bash <(curl -fsSL …)` 在线安装、明确服务端角色 | 已实现待安装实测/发布 | 根 `install.sh`；README、`packaging/docs/INSTALL.zh-CN.md`、`packaging/server/README.zh-CN.md`；WSL Ubuntu 中 `bash -n install.sh`、`bash install.sh --check` 通过：从真实 GitHub v0.2.0 下载包、SHA-256/目录结构/包内脚本语法校验；没有安装或修改系统服务 | GitHub main/install.sh 本轮检查为 404，新增脚本尚未推送；systemd 完整安装/实机未执行；只支持 x86_64，新装入口拒绝覆盖已有部署 |
+| `bash <(curl -fsSL …)` 在线安装、明确服务端角色 | 已发布并通过在线下载校验；待安装实测 | 根 `install.sh`；提交 `20298d4` 已推送 GitHub main；公开 raw 脚本与本地 SHA-256 一致；WSL 实际执行公开命令 `--check` 通过：GitHub v0.2.0 下载、SHA-256/目录结构/包内脚本语法校验；没有安装或修改系统服务 | systemd 完整安装/实机未执行；只支持 x86_64，新装入口拒绝覆盖已有部署；发布包仍为既有 v0.2.0 |
 | 离线安装命令与包内路径 | 已修复并做解包运行检查 | 三处说明使用 `scripts/install.sh`；包内安装器增加角色提示及完整性校验；本地 tar.gz 重打包，WSL 临时目录解包、脚本语法、真实二进制随机 loopback `/health` 通过；本地 manifest/SHA256SUMS 更新 | 没有替换 GitHub 已发布资产；在线脚本使用原有 v0.2.0 包与对应发布校验和；未操作 192.168.9.66 |
+
+## 2026-10-19 增量：未完成项源码复核与兼顾档新性能要求
+
+- 用户新增要求：兼顾质量和流畅档实际动态呈现至少 30 fps，提供 60 fps 档与实测；具体门槛、条件和统计见根目录 [续开发提示词](../未实现功能_续开发提示词_2026-10-19.md)。旧规格 24/30 次更新目标不再作为兼顾档验收依据；当前代码没有因新增文档而达到该指标。
+- 核查发现：Host 默认 15 fps、XCap/GDI 串行采集/JPEG、Dart 图块解码、固定 tiles、接收帧数统计；无 Rust 核心桥/native texture、完整模式协商、中继、Linux/Android Host。Linux 客户端历史包存在，但当前 Git 源码无 `client/linux/` runner；账号已接入，设置页相关说明过时。提示词列出 F01–F33 和 C01–C16/A01–A05/S01–S10 的增量任务及暂不能交付原因。
+- 本轮实跑：Windows 根 `cargo fmt --all -- --check`、`cargo test --workspace --locked --offline`（28 passed）；Dart analyze（0 issue）；Flutter `test --no-pub`（40 passed，含响应式）；WSL Ubuntu 独立服务端 fmt、release locked offline test（10 passed）。服务端测试复用 `/home/ubuntu/yl-server-build/target`。
+- 本轮未做：新客户端/Host 发布构建、性能重测、完整点击登录/远控 E2E、跨物理机/公网、真机触控、Linux 桌面、两小时/4 GiB/万文件、Docker/systemd 新装、正式签名或生产部署。平台限制已参考官方 Android/Microsoft/XDG/上游资料，链接在提示词中；不把缺环境说成永久无法实现。
 
 状态图例：**已实现并实测** / **已实现待实测** / **部分实现** / **未实现** / **平台不支持**。
 
