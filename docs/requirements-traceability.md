@@ -1,5 +1,12 @@
 # 需求追踪表
 
+## 2026-10-19 增量：Linux 控制服务端在线一键安装
+
+| 需求 | 状态 | 实现文件与测试环境/结果 | 剩余问题 |
+|---|---|---|---|
+| `bash <(curl -fsSL …)` 在线安装、明确服务端角色 | 已实现待安装实测/发布 | 根 `install.sh`；README、`packaging/docs/INSTALL.zh-CN.md`、`packaging/server/README.zh-CN.md`；WSL Ubuntu 中 `bash -n install.sh`、`bash install.sh --check` 通过：从真实 GitHub v0.2.0 下载包、SHA-256/目录结构/包内脚本语法校验；没有安装或修改系统服务 | GitHub main/install.sh 本轮检查为 404，新增脚本尚未推送；systemd 完整安装/实机未执行；只支持 x86_64，新装入口拒绝覆盖已有部署 |
+| 离线安装命令与包内路径 | 已修复并做解包运行检查 | 三处说明使用 `scripts/install.sh`；包内安装器增加角色提示及完整性校验；本地 tar.gz 重打包，WSL 临时目录解包、脚本语法、真实二进制随机 loopback `/health` 通过；本地 manifest/SHA256SUMS 更新 | 没有替换 GitHub 已发布资产；在线脚本使用原有 v0.2.0 包与对应发布校验和；未操作 192.168.9.66 |
+
 状态图例：**已实现并实测** / **已实现待实测** / **部分实现** / **未实现** / **平台不支持**。
 
 最后更新：2026-10-18（0.2.0 / 协议 v2）。此表是唯一事实来源；“代码存在”“构建通过”“单元测试通过”“本机 E2E”分别记录，不能互相替代。当前完成 **M0 Windows 引擎、阶段 B 账号/设备/配对/票据/Host 授权闭环、Flutter Windows/Android 客户端、基础文件传输、控制服务端与 0.2.0 安装产物**；仍不是完整产品。证据索引见 [阶段 B](evidence/b-auth-ticket-2026-10-18.md)、[打包](evidence/packaging-0.2.0.md)、[M0](evidence/m0-results.md)、[M1 Flutter](evidence/m1-flutter-client.md)、[Android](evidence/m1-android-client.md)、[文件](evidence/m2-file-transfer.md)、[平台 UI](evidence/m3-platform-ui.md)、[服务端](evidence/m4-control-server.md)。

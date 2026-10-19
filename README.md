@@ -91,7 +91,27 @@ flutter build apk --release --target-platform android-arm64
 
 APK 使用独立预览签名；正式发布前必须由用户提供并保管正式密钥。签名变更不能静默覆盖安装清数据。
 
-### 控制服务端
+### Linux 控制服务端：一键安装
+
+**这是服务端**，提供账号、设备、授权和 Web 管理后台。适用于运行 systemd 的 Ubuntu/Debian x86_64；使用预编译包，无需 Rust/Flutter/Docker。
+
+在线一键安装（Linux 控制服务端）：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/gameimpact/yuanlian/main/install.sh)
+```
+
+脚本下载 v0.2.0 服务端包、核对发布清单中的 SHA-256、调用安装脚本并检查 systemd 与 `/health`。需要时自动调用 sudo；已有部署会提示备份和手动升级。可在命令末尾加 `--check`，只下载校验，不安装。
+
+离线安装：将 `dist/0.2.0/server-linux-x86_64/yl-server-0.2.0-linux-x86_64.tar.gz` 复制到 Linux 当前目录，然后执行：
+
+```bash
+tar -xzf yl-server-0.2.0-linux-x86_64.tar.gz && sudo bash ./yl-server-0.2.0-linux-x86_64/scripts/install.sh
+```
+
+安装后检查：`curl --fail http://127.0.0.1:18080/health`。默认只监听本机；远程管理通过 SSH 隧道访问 `/admin`。详细步骤见 [服务端安装说明](packaging/server/README.zh-CN.md)。Linux 桌面客户端另行安装，Linux 被控 Host 尚未实现。
+
+### 控制服务端源码构建（开发用）
 
 ```bash
 cd server

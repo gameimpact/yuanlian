@@ -9,6 +9,13 @@ if [[ ${EUID} -ne 0 ]]; then
 fi
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
+echo "远联 YuanLian — Linux 控制服务端安装（账号 / 设备 / 授权 / Web 管理后台）"
+for required in bin/yl-server systemd/yuanlian-server.service config/server.env.example; do
+  if [[ ! -f "$ROOT_DIR/$required" ]]; then
+    echo "服务端安装包不完整：缺少 $required；请从完整解压包运行 scripts/install.sh。" >&2
+    exit 1
+  fi
+done
 PREFIX=/opt/yuanlian
 STATE=/var/lib/yuanlian
 CONF=/etc/yuanlian

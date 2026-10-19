@@ -53,7 +53,23 @@
 
 ## Linux 服务端 x86_64
 
-解压 `server-linux-x86_64/yl-server-0.2.0-linux-x86_64.tar.gz`，按包内 `README.zh-CN.md` 安装：创建 `yuanlian` 用户、复制二进制与 systemd 单元、设置 `YUANLIAN_DB`/`YUANLIAN_BIND`。默认只监听 `127.0.0.1:18080`；必须由 TLS 反向代理暴露。
+**这是控制服务端**，提供账号、设备、授权与 Web 管理后台。适用于运行 systemd 的 Ubuntu/Debian x86_64；Linux 桌面客户端另行安装，Linux 被控 Host 尚未实现。
+
+在线一键安装（Linux 控制服务端）：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/gameimpact/yuanlian/main/install.sh)
+```
+
+脚本下载 v0.2.0 服务端包、校验 SHA-256、安装并检查服务。加 `--check` 可只下载校验；已有部署请先备份并手动升级。
+
+离线安装：将 `server-linux-x86_64/yl-server-0.2.0-linux-x86_64.tar.gz` 复制到 Linux 当前目录，一键解压并安装：
+
+```bash
+tar -xzf yl-server-0.2.0-linux-x86_64.tar.gz && sudo bash ./yl-server-0.2.0-linux-x86_64/scripts/install.sh
+```
+
+无需安装 Rust/Flutter/Docker。脚本创建 `yuanlian` 用户、复制二进制与 systemd 单元、设置 `YUANLIAN_DB`/`YUANLIAN_BIND`。默认只监听 `127.0.0.1:18080`；通过 SSH 隧道访问 `/admin`，对外访问必须配置 TLS 反向代理。执行 `curl --fail http://127.0.0.1:18080/health` 验证服务。
 
 ## 最小验证
 

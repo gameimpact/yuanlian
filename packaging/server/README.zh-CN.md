@@ -2,12 +2,32 @@
 
 本包提供账号、邀请注册、设备目录、一次性设备令牌、配对、Ed25519 会话票据、活动会话撤销、审计与 Web 后台。**它不是中继，不转发屏幕/输入/文件内容。**
 
-## 安装（Ubuntu/Debian）
+## Linux 服务端一键安装（Ubuntu/Debian x86_64）
+
+**安装角色：控制服务端（账号、设备、授权与 Web 管理后台）。** Linux 桌面客户端另有安装包；Linux 被控 Host 尚未实现。
+
+在线一键安装（Linux 控制服务端）：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/gameimpact/yuanlian/main/install.sh)
+```
+
+下载固定 v0.2.0 服务端包并校验发布清单 SHA-256，再安装并检查服务；需要时调用 sudo。已有部署会拒绝覆盖，请先备份并手动升级。命令末尾加 `--check` 可只下载并校验，不安装。
+
+离线安装：将可信来源的 `yl-server-0.2.0-linux-x86_64.tar.gz` 放到当前目录后，执行一行命令：
+
+```bash
+tar -xzf yl-server-0.2.0-linux-x86_64.tar.gz && sudo bash ./yl-server-0.2.0-linux-x86_64/scripts/install.sh
+```
+
+需要运行 systemd 的 Ubuntu/Debian x86_64、glibc 与 sudo/root 权限；无需安装 Rust、Flutter 或 Docker。
+
+也可分步执行：
 
 ```bash
 tar xzf yl-server-0.2.0-linux-x86_64.tar.gz
 cd yl-server-0.2.0-linux-x86_64
-sudo ./install.sh
+sudo bash ./scripts/install.sh
 curl http://127.0.0.1:18080/health
 ```
 
