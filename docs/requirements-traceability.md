@@ -9,6 +9,8 @@
 
 ## 2026-10-19 增量：未完成项源码复核与兼顾档新性能要求
 
+- 用户追加 Android 测试要求：在根目录续开发提示词的“Android 开发测试强制要求”中指定本地 MuMu 为主要联调/安装/UI/E2E 环境，由执行开发 AI 自行从网易官网下载、安装和配置；按实际 Android/API/ABI 建立多版本矩阵。MuMu 不覆盖的版本需注明并用官方 AVD/真机补测，模拟器与真机证据分开。本轮仅文档补充与差异检查，未下载安装 MuMu、未执行多版本测试，不标为已适配。
+
 - 用户新增要求：兼顾质量和流畅档实际动态呈现至少 30 fps，提供 60 fps 档与实测；具体门槛、条件和统计见根目录 [续开发提示词](../未实现功能_续开发提示词_2026-10-19.md)。旧规格 24/30 次更新目标不再作为兼顾档验收依据；当前代码没有因新增文档而达到该指标。
 - 核查发现：Host 默认 15 fps、XCap/GDI 串行采集/JPEG、Dart 图块解码、固定 tiles、接收帧数统计；无 Rust 核心桥/native texture、完整模式协商、中继、Linux/Android Host。Linux 客户端历史包存在，但当前 Git 源码无 `client/linux/` runner；账号已接入，设置页相关说明过时。提示词列出 F01–F33 和 C01–C16/A01–A05/S01–S10 的增量任务及暂不能交付原因。
 - 本轮实跑：Windows 根 `cargo fmt --all -- --check`、`cargo test --workspace --locked --offline`（28 passed）；Dart analyze（0 issue）；Flutter `test --no-pub`（40 passed，含响应式）；WSL Ubuntu 独立服务端 fmt、release locked offline test（10 passed）。服务端测试复用 `/home/ubuntu/yl-server-build/target`。
