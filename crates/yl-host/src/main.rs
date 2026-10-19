@@ -1,10 +1,14 @@
 mod approval;
 mod capture;
 mod control;
+mod fast_capture;
 mod files;
+mod flow;
 mod input;
+mod quality;
 mod session;
 mod tls;
+mod wgc;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -30,6 +34,11 @@ struct Args {
     /// 监听地址。局域网测试用 0.0.0.0:24800；默认只监听本机。
     #[arg(long, default_value = "127.0.0.1:24800")]
     listen: String,
+    /// 固定官方 Sunshine.exe；仅在 quality 票据授权期间启动专用实例。
+    #[arg(long)]
+    sunshine: Option<PathBuf>,
+    #[arg(long, default_value_t = 48189)]
+    quality_port: u16,
 
     /// 允许主控注入键鼠。默认只读；Host 会在会话层拒绝输入。
     #[arg(long)]
@@ -40,7 +49,7 @@ struct Args {
     monitor: usize,
 
     /// 画面采集上限帧率（1-60）。
-    #[arg(long, default_value_t = 15)]
+    #[arg(long, default_value_t = 30)]
     fps: u32,
 
     /// 变化图块 JPEG 质量（1-100）。
@@ -100,6 +109,14 @@ struct Args {
     #[arg(long, value_name = "FILE")]
     capture_test: Option<PathBuf>,
 
+    /// 运行 Host 侧采集+图块差分管线基准并输出 JSON，不连接查看器。
+    #[arg(long, value_name = "FRAMES")]
+    capture_bench: Option<u64>,
+
+    /// 基准时每帧强制全量编码，用于测量最坏情况；不代表真实变化率。
+    #[arg(long)]
+    capture_bench_full: bool,
+
     /// 移动鼠标到屏幕中心并校验后复位，用于验证 SendInput。
     #[arg(long)]
     test_input: bool,
@@ -150,6 +167,15 @@ fn main() -> Result<()> {
 
     if let Some(path) = &args.capture_test {
         return run_capture_test(path, args.monitor, &tile_settings);
+    }
+    if let Some(frames) = args.capture_bench {
+        return capture::benchmark(
+            args.monitor,
+            frames,
+            args.fps,
+            tile_settings,
+            args.capture_bench_full,
+        );
     }
     if args.test_input {
         let info = capture::monitor_info(args.monitor)?;
@@ -334,10 +360,16 @@ async fn run_server(
         allow_anonymous: args.allow_anonymous,
         auto_approve: args.auto_approve,
         control_plane: control,
+        quality: args.sunshine.as_ref().map(|exe| quality::QualityConfig {
+            executable: exe.clone(),
+            bind: listen.ip(),
+            port: args.quality_port,
+        }),
     };
 
     loop {
         let (tcp, peer) = listener.accept().await.context("accept viewer")?;
+        tcp.set_nodelay(true)?;
         info!(%peer, "incoming connection");
         let accept_result =
             tokio::time::timeout(Duration::from_secs(15), acceptor.accept(tcp)).await;

@@ -15,6 +15,7 @@ enum RemotePhase {
   connecting,
   securing,
   waitingWelcome,
+  qualityAuthorized,
   waitingFirstFrame,
   ready,
   failed,
@@ -26,6 +27,7 @@ enum RemotePhase {
     RemotePhase.connecting => '建立 TCP 连接',
     RemotePhase.securing => 'TLS 握手与指纹校验',
     RemotePhase.waitingWelcome => '等待 Host 授权',
+    RemotePhase.qualityAuthorized => 'Host 已授权串流端点',
     RemotePhase.waitingFirstFrame => '等待首帧',
     RemotePhase.ready => '已连接',
     RemotePhase.failed => '连接失败',
@@ -104,13 +106,18 @@ class RemoteClient extends ChangeNotifier {
     String? clientName,
     this.sessionTicket,
     this.sessionNonce = '',
-    this.features = featureFileTransfer | featureTextInput | featureSessionTicket,
+    this.qualityCertificate = '',
+    this.features =
+        featureFileTransfer | featureTextInput | featureSessionTicket,
   }) : clientName = clientName ?? 'YuanLian Flutter';
 
   final ConnectionProfile profile;
   final String clientName;
   final String? sessionTicket;
   final String sessionNonce;
+  final String qualityCertificate;
+  QualityReadyReceived? qualityReady;
+  String? peerAddress;
   final int features;
 
   final StreamController<RemoteEvent> _events =
@@ -231,9 +238,7 @@ class RemoteClient extends ChangeNotifier {
     } on HandshakeException catch (error) {
       raw.destroy();
       _fail(
-        certificateMismatch
-            ? 'Host 证书指纹不匹配，连接已拒绝'
-            : 'TLS 握手失败：$error',
+        certificateMismatch ? 'Host 证书指纹不匹配，连接已拒绝' : 'TLS 握手失败：$error',
         code: certificateMismatch ? 'fingerprint_mismatch' : 'tls_failed',
       );
       return;
@@ -248,6 +253,7 @@ class RemoteClient extends ChangeNotifier {
     }
 
     _socket = secure;
+    peerAddress = secure.remoteAddress.address;
     _lastReceived = DateTime.now();
     _setPhase(RemotePhase.waitingWelcome);
     _subscription = secure.listen(
@@ -264,9 +270,14 @@ class RemoteClient extends ChangeNotifier {
         features: features,
         sessionTicket: sessionTicket,
         sessionNonce: sessionNonce,
+        mode: profile.mode,
+        qualityCertificate: qualityCertificate,
       ),
     );
-    _heartbeat = Timer.periodic(const Duration(seconds: 5), (_) => _heartbeatTick());
+    _heartbeat = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _heartbeatTick(),
+    );
   }
 
   void _resetBeforeConnect() {
@@ -312,7 +323,8 @@ class RemoteClient extends ChangeNotifier {
     _lastReceived = DateTime.now();
     _append(data);
     while (_start + 4 <= _buffer.length) {
-      final length = (_buffer[_start] << 24) |
+      final length =
+          (_buffer[_start] << 24) |
           (_buffer[_start + 1] << 16) |
           (_buffer[_start + 2] << 8) |
           _buffer[_start + 3];
@@ -360,15 +372,34 @@ class RemoteClient extends ChangeNotifier {
       return;
     }
     if (_start > 256 * 1024) {
-      _buffer = Uint8List.fromList(
-        Uint8List.sublistView(_buffer, _start),
-      );
+      _buffer = Uint8List.fromList(Uint8List.sublistView(_buffer, _start));
       _start = 0;
     }
   }
 
   void _handleMessage(ServerMessage message) {
     switch (message) {
+      case QualityReadyReceived():
+        if (profile.mode != 'quality' ||
+            qualityReady != null ||
+            sessionTicket == null ||
+            (message.permissions & ~3) != 0 ||
+            (message.permissions & permissionView) == 0 ||
+            (message.inputAllowed &&
+                (message.permissions & permissionControl) == 0) ||
+            message.port < 1025 ||
+            message.port > 65000 ||
+            message.serverCertificate.length > 8192 ||
+            !message.serverCertificate.startsWith(
+              '-----BEGIN CERTIFICATE-----',
+            ) ||
+            !RegExp(r'^[a-fA-F0-9-]{36}$').hasMatch(message.serverUuid)) {
+          _fail('无效的质量端点授权', code: 'bad_message');
+          return;
+        }
+        qualityReady = message;
+        _setPhase(RemotePhase.qualityAuthorized);
+
       case WelcomeReceived(:final welcome):
         if (this.welcome != null) {
           _fail('Host 重复发送 Welcome', code: 'bad_message');
@@ -379,6 +410,10 @@ class RemoteClient extends ChangeNotifier {
             '协议版本不兼容：Host ${welcome.protocolVersion}，客户端 $protocolVersion',
             code: 'protocol_version',
           );
+          return;
+        }
+        if (welcome.mode != profile.mode) {
+          _fail('Host 模式与请求不一致', code: 'bad_message');
           return;
         }
         this.welcome = welcome;
@@ -397,6 +432,10 @@ class RemoteClient extends ChangeNotifier {
           }
         });
       case FrameReceived(:final frame):
+        if (frame.progressive != (welcome?.mode == 'flow')) {
+          _fail('画面消息与协商模式不一致', code: 'bad_message');
+          return;
+        }
         framesReceived += 1;
         bytesReceived += frame.encodedBytes;
         if (phase == RemotePhase.waitingFirstFrame &&
@@ -419,6 +458,10 @@ class RemoteClient extends ChangeNotifier {
           _pendingPingAt = null;
         }
       case HostError(:final code, :final message):
+        if (profile.mode == 'quality') {
+          _fail(message, code: code.wireName);
+          return;
+        }
         if (code == ErrorCode.inputDenied) {
           inputAllowed = false;
           notifyListeners();
@@ -437,12 +480,12 @@ class RemoteClient extends ChangeNotifier {
           _events.add(HostErrorEvent(code, message));
         }
       case FileCapabilitiesReceived(
-          :final enabled,
-          :final rootLabel,
-          :final read,
-          :final write,
-          :final delete,
-        ):
+        :final enabled,
+        :final rootLabel,
+        :final read,
+        :final write,
+        :final delete,
+      ):
         fileEnabled = enabled;
         fileRootLabel = rootLabel;
         fileRead = read;
@@ -461,7 +504,12 @@ class RemoteClient extends ChangeNotifier {
         if (!_events.isClosed) {
           _events.add(UploadAckEvent(taskId, received));
         }
-      case FileDoneReceived(:final taskId, :final path, :final size, :final sha256):
+      case FileDoneReceived(
+        :final taskId,
+        :final path,
+        :final size,
+        :final sha256,
+      ):
         if (!_events.isClosed) {
           _events.add(FileDoneEvent(taskId, path, size, sha256));
         }
@@ -481,7 +529,12 @@ class RemoteClient extends ChangeNotifier {
     if (_closed) {
       return;
     }
-    if (DateTime.now().difference(_lastReceived) > const Duration(seconds: 30)) {
+    if (DateTime.now().difference(_lastReceived) >
+        Duration(
+          seconds: profile.mode == 'quality'
+              ? (phase == RemotePhase.waitingWelcome ? 50 : 8)
+              : 30,
+        )) {
       _fail('心跳超时（30 秒未收到 Host 消息）', code: 'heartbeat_timeout');
       return;
     }
@@ -495,10 +548,7 @@ class RemoteClient extends ChangeNotifier {
     if (_closed) {
       return;
     }
-    _disconnectInternal(
-      '连接错误：$error',
-      notifyHost: false,
-    );
+    _disconnectInternal('连接错误：$error', notifyHost: false);
   }
 
   void _onSocketDone() {
@@ -550,6 +600,9 @@ class RemoteClient extends ChangeNotifier {
   }
 
   void _closeSocket() {
+    _pendingMouse = null;
+    _mouseTimer?.cancel();
+    _mouseTimer = null;
     _heartbeat?.cancel();
     _firstFrameTimeout?.cancel();
     _subscription?.cancel();
@@ -573,17 +626,33 @@ class RemoteClient extends ChangeNotifier {
 
   void requestKeyframe() => _send(encodeRequestKeyframe());
 
+  Timer? _mouseTimer;
+  (int, int)? _pendingMouse;
+  void _flushMouse() {
+    _mouseTimer?.cancel();
+    _mouseTimer = null;
+    final move = _pendingMouse;
+    _pendingMouse = null;
+    if (move != null && inputAllowed) _send(encodeMouseMove(move.$1, move.$2));
+  }
+
   void sendMouseMove(int x, int y) {
     if (!inputAllowed) {
       return;
     }
-    _send(encodeMouseMove(x, y));
+    if (profile.mode == 'flow') {
+      _pendingMouse = (x, y);
+      _mouseTimer ??= Timer(const Duration(milliseconds: 25), _flushMouse);
+    } else {
+      _send(encodeMouseMove(x, y));
+    }
   }
 
   void sendMouseButton(HostMouseButton button, bool down) {
     if (!inputAllowed) {
       return;
     }
+    _flushMouse();
     _send(encodeMouseButton(button, down));
   }
 
@@ -602,6 +671,9 @@ class RemoteClient extends ChangeNotifier {
   }
 
   void sendReleaseAll() {
+    _pendingMouse = null;
+    _mouseTimer?.cancel();
+    _mouseTimer = null;
     _send(encodeReleaseAll());
   }
 
@@ -611,12 +683,7 @@ class RemoteClient extends ChangeNotifier {
   void startFileDownload(int taskId, String path) =>
       _send(encodeFileDownload(taskId, path));
 
-  void startFileUpload(
-    int taskId,
-    String path,
-    int size,
-    bool overwrite,
-  ) =>
+  void startFileUpload(int taskId, String path, int size, bool overwrite) =>
       _send(encodeUploadStart(taskId, path, size, overwrite));
 
   void sendUploadChunk(int taskId, int offset, Uint8List data) =>

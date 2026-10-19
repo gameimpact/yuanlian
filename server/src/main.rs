@@ -176,6 +176,23 @@ struct ClaimRequest {
 #[derive(Debug, Deserialize)]
 struct TicketRequest {
     nonce: String,
+    #[serde(default = "default_session_mode", alias = "engine")]
+    mode: String,
+}
+
+fn default_session_mode() -> String {
+    "tiles".to_string()
+}
+
+fn require_supported_session_mode(mode: &str) -> Result<(), ApiError> {
+    if !matches!(mode, "tiles" | "flow" | "quality") {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "unsupported_mode",
+            "Unknown session mode; supported: tiles, flow, quality.",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -635,6 +652,8 @@ async fn server_info(State(state): State<AppState>) -> Result<Json<Value>, ApiEr
         "initialized": users > 0,
         "users": users,
         "features": ["accounts", "invites", "sessions", "devices", "pairing", "grants", "admin"],
+        "session_modes": ["tiles", "flow", "quality"],
+        "quality_streaming": {"supported": true, "requires": "host_v3_dedicated_sunshine", "embedded": false},
         "tls": false,
         "note": "Bind loopback and terminate TLS at a reverse proxy before exposure."
     })))
@@ -877,6 +896,7 @@ async fn issue_session_ticket(
     Json(request): Json<TicketRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let actor = authenticate(&state, &headers)?;
+    require_supported_session_mode(&request.mode)?;
     let nonce = request.nonce.trim();
     if nonce.len() != 64 || !nonce.chars().all(|character| character.is_ascii_hexdigit()) {
         return Err(ApiError::bad(
@@ -924,6 +944,7 @@ async fn issue_session_ticket(
         user: actor.username.clone(),
         jti: random_hex(16),
         purpose: TICKET_PURPOSE.to_string(),
+        mode: request.mode.clone(),
         nonce_sha256: nonce_sha256(nonce),
         permissions,
         iat: issued_at,
@@ -2898,6 +2919,8 @@ async fn network_capabilities(
     let _actor = authenticate(&state, &headers)?;
     Ok(Json(json!({
         "transports": ["direct_tcp_tls"],
+        "session_modes": ["tiles", "flow", "quality"],
+        "quality_streaming": {"supported": true, "requires": "host_v3_dedicated_sunshine", "embedded": false},
         "p2p": false,
         "ice": false,
         "stun": false,
@@ -3044,6 +3067,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn known_modes_are_allowed_and_unknown_modes_are_rejected() {
+        for mode in ["tiles", "flow", "quality"] {
+            assert!(require_supported_session_mode(mode).is_ok());
+        }
+        for mode in ["moonlight", "file_only", "", "TILES"] {
+            let error = require_supported_session_mode(mode).unwrap_err();
+            assert_eq!(error.status, StatusCode::CONFLICT);
+            assert_eq!(error.code, "unsupported_mode");
+        }
+    }
+
+    #[test]
+    fn legacy_ticket_requests_remain_tiles_and_engine_alias_is_checked() {
+        let legacy: TicketRequest =
+            serde_json::from_value(json!({"nonce": "ab".repeat(32)})).unwrap();
+        assert_eq!(legacy.mode, "tiles");
+        let quality: TicketRequest =
+            serde_json::from_value(json!({"nonce": "ab".repeat(32), "engine": "quality"})).unwrap();
+        assert!(require_supported_session_mode(&quality.mode).is_ok());
+    }
+
+    #[test]
     fn password_hash_roundtrip() {
         let hash = hash_password("correct horse battery staple").unwrap();
         assert!(verify_password(&hash, "correct horse battery staple"));
@@ -3176,6 +3221,7 @@ mod tests {
             user: "alice".into(),
             jti: "session-test".into(),
             purpose: TICKET_PURPOSE.into(),
+            mode: "tiles".into(),
             nonce_sha256: nonce_sha256(&nonce),
             permissions: PERMISSION_VIEW | PERMISSION_CONTROL,
             iat: now,

@@ -51,6 +51,7 @@ pub struct HostConfig {
     pub allow_anonymous: bool,
     pub auto_approve: bool,
     pub control_plane: Option<Arc<ControlPlane>>,
+    pub quality: Option<crate::quality::QualityConfig>,
 }
 
 struct Authorization {
@@ -64,22 +65,20 @@ struct Authorization {
 }
 
 pub async fn run_session(
-    stream: TlsStream<TcpStream>,
+    mut stream: TlsStream<TcpStream>,
     peer: SocketAddr,
     config: HostConfig,
 ) -> Result<()> {
-    let (mut reader, mut writer) = tokio::io::split(stream);
-
     let hello = match timeout(
         Duration::from_secs(10),
-        read_message::<_, ClientMessage>(&mut reader),
+        read_message::<_, ClientMessage>(&mut stream),
     )
     .await
     {
         Ok(Ok(Some(ClientMessage::Hello(hello)))) => hello,
         Ok(Ok(Some(_))) => {
             reject(
-                &mut writer,
+                &mut stream,
                 ErrorCode::BadMessage,
                 "expected ClientHello as the first message",
             )
@@ -90,6 +89,13 @@ pub async fn run_session(
         Ok(Err(error)) => return Err(error.context("read ClientHello")),
         Err(_) => bail!("timed out waiting for ClientHello"),
     };
+
+    // Restrict the kernel backlog only for low-bandwidth flow; retain the
+    // existing window for high-throughput balanced capture and files.
+    if hello.mode == "flow" {
+        socket2::SockRef::from(stream.get_ref().0).set_send_buffer_size(16 * 1024)?;
+    }
+    let (mut reader, mut writer) = tokio::io::split(stream);
 
     if hello.protocol_version != PROTOCOL_VERSION {
         let message = format!(
@@ -105,7 +111,7 @@ pub async fn run_session(
         config.file_root.is_some(),
         config.file_read_only,
     );
-    let auth = match authorize(&hello, &config, local) {
+    let mut auth = match authorize(&hello, &config, local) {
         Ok(auth) => auth,
         Err((code, message)) => {
             reject(&mut writer, code, &message).await?;
@@ -113,6 +119,25 @@ pub async fn run_session(
         }
     };
 
+    if !matches!(hello.mode.as_str(), "tiles" | "flow" | "quality") {
+        return reject(
+            &mut writer,
+            ErrorCode::BadMessage,
+            "unsupported session mode",
+        )
+        .await;
+    }
+    if hello.mode == "quality" {
+        if !auth.authenticated || config.quality.is_none() {
+            return reject(
+                &mut writer,
+                ErrorCode::PermissionDenied,
+                "Quality requires a ticket and Host --sunshine",
+            )
+            .await;
+        }
+        auth.permissions &= PERMISSION_VIEW | PERMISSION_CONTROL;
+    }
     if !config.auto_approve {
         let account = auth.account.clone();
         let permissions = auth.permissions;
@@ -210,6 +235,29 @@ pub async fn run_session(
             unreachable!()
         }
     }
+    if hello.mode == "quality" {
+        let quality = config.quality.clone().context("quality adapter missing")?;
+        let control = config
+            .control_plane
+            .clone()
+            .context("quality requires control plane")?;
+        let stream = reader.unsplit(writer);
+        let result = crate::quality::serve(
+            stream,
+            quality,
+            hello.quality_certificate.clone(),
+            control.clone(),
+            auth.session_id.clone(),
+            auth.ticket_expires_at,
+            auth.permissions,
+            input_allowed,
+        )
+        .await;
+        if result.is_err() {
+            control.report_end(&auth.session_id, "quality_failed");
+        }
+        return result;
+    }
     let info = capture::monitor_info(config.monitor)?;
     if hello.request_input && !input_allowed {
         warn!(
@@ -224,8 +272,12 @@ pub async fn run_session(
         screen_width: info.width,
         screen_height: info.height,
         input_allowed,
-        mode: "tiles".into(),
-        tile_size: config.tile_settings.tile_size,
+        mode: hello.mode.clone(),
+        tile_size: if hello.mode == "flow" {
+            64
+        } else {
+            config.tile_settings.tile_size
+        },
         authenticated: auth.authenticated,
         account: auth.account.clone().unwrap_or_default(),
         permissions: auth.permissions,
@@ -243,6 +295,11 @@ pub async fn run_session(
         }
         _ => None,
     };
+    if hello.mode == "flow" {
+        if let Some(files) = files.as_mut() {
+            files.set_flow_budget();
+        }
+    }
     let (file_enabled, file_root_label) = files
         .as_ref()
         .map(|server| server.capabilities())
@@ -280,10 +337,18 @@ pub async fn run_session(
     };
     let mut injector = InputInjector::new(geometry);
 
-    let (tx, rx) = mpsc::channel::<ServerMessage>(24);
-    let writer_task = tokio::spawn(writer_loop(writer, rx));
-
+    let flow = hello.mode == "flow";
+    let budget = flow.then(crate::flow::Budget::new);
+    let (tx, rx) = mpsc::channel::<ServerMessage>(if flow { 4 } else { 24 });
+    let (frame_tx, frame_rx) = mpsc::channel::<ServerMessage>(1);
     let stop = Arc::new(AtomicBool::new(false));
+    let writer_stop = stop.clone();
+    let writer_budget = budget.clone();
+    let writer_task = tokio::spawn(async move {
+        let result = writer_loop(writer, rx, frame_rx, writer_budget).await;
+        writer_stop.store(true, Ordering::Relaxed);
+        result
+    });
     let force_full = Arc::new(AtomicBool::new(true));
 
     let capture_options = CaptureOptions {
@@ -291,13 +356,27 @@ pub async fn run_session(
         fps: config.fps,
         tile_settings: config.tile_settings.clone(),
     };
-    let capture_tx = tx.clone();
+    let capture_tx = if flow { frame_tx } else { tx.clone() };
     let capture_stop = stop.clone();
     let capture_force = force_full.clone();
     let capture_task = tokio::task::spawn_blocking(move || {
-        if let Err(error) =
-            capture::capture_loop(capture_options, capture_tx, capture_stop, capture_force)
-        {
+        let result = if flow {
+            crate::flow::capture_loop(
+                capture_options.monitor,
+                capture_tx,
+                capture_stop.clone(),
+                capture_force,
+            )
+        } else {
+            capture::capture_loop(
+                capture_options,
+                capture_tx,
+                capture_stop.clone(),
+                capture_force,
+            )
+        };
+        if let Err(error) = result {
+            capture_stop.store(true, Ordering::Relaxed);
             warn!(%error, "capture loop ended");
         }
     });
@@ -321,6 +400,18 @@ pub async fn run_session(
             .await
             {
                 Ok(Ok(Some(message))) => {
+                    if let Some(budget) = &budget {
+                        let bytes = bincode_size(&message);
+                        if bytes > crate::flow::MAX_DATA_MESSAGE {
+                            break;
+                        }
+                        budget
+                            .charge(
+                                bytes,
+                                matches!(message, ClientMessage::FileUploadChunk { .. }),
+                            )
+                            .await;
+                    }
                     if message_tx.send(message).await.is_err() {
                         break;
                     }
@@ -519,6 +610,12 @@ fn authorize(
                             };
                             (code, format!("会话票据无效：{error}"))
                         })?;
+                if claims.mode != hello.mode {
+                    return Err((
+                        ErrorCode::PermissionDenied,
+                        "Ticket mode does not match requested mode".into(),
+                    ));
+                }
                 if !control.claim_ticket(&claims) {
                     return Err((
                         ErrorCode::TicketReplay,
@@ -599,14 +696,90 @@ where
     bail!("{message}")
 }
 
-async fn writer_loop<W>(mut writer: W, mut rx: mpsc::Receiver<ServerMessage>) -> Result<()>
+fn bincode_size<T: serde::Serialize>(message: &T) -> usize {
+    bincode::serialized_size(message)
+        .unwrap_or(u64::MAX)
+        .saturating_add(4)
+        .min(usize::MAX as u64) as usize
+}
+async fn writer_loop<W>(
+    mut writer: W,
+    mut rx: mpsc::Receiver<ServerMessage>,
+    mut frames: mpsc::Receiver<ServerMessage>,
+    budget: Option<crate::flow::Budget>,
+) -> Result<()>
 where
     W: AsyncWrite + Unpin,
 {
-    while let Some(message) = rx.recv().await {
-        write_message(&mut writer, &message)
-            .await
-            .context("write to viewer")?;
+    if budget.is_none() {
+        while let Some(message) = rx.recv().await {
+            write_message(&mut writer, &message).await?;
+        }
+        return Ok(());
+    }
+    let budget = budget.unwrap();
+    let mut pending = std::collections::VecDeque::new();
+    let mut frame = None;
+    let mut frames_open = true;
+    let mut file_turn = false;
+    loop {
+        while pending.len() < 8 {
+            match rx.try_recv() {
+                Ok(msg) => pending.push_back(msg),
+                Err(_) => break,
+            }
+        }
+        if frame.is_none() {
+            frame = frames.try_recv().ok();
+        }
+        // Control replies bypass both frame and file queues. Alternate bulk
+        // frames/files so a large download cannot starve screen updates.
+        let control = pending.iter().position(|m| {
+            !matches!(
+                m,
+                ServerMessage::FileChunk { .. } | ServerMessage::FileDone { .. }
+            )
+        });
+        let message = if let Some(index) = control {
+            pending.remove(index)
+        } else if frame.is_some() && (!file_turn || pending.is_empty()) {
+            file_turn = true;
+            frame.take()
+        } else if let Some(message) = pending.front() {
+            if !matches!(message, ServerMessage::FileChunk { .. })
+                || budget.try_file(bincode_size(message)).await
+            {
+                file_turn = false;
+                pending.pop_front()
+            } else {
+                frame.take()
+            }
+        } else {
+            None
+        };
+        let Some(mut message) = message else {
+            tokio::select! { biased;
+                msg=rx.recv(),if pending.len()<8=>match msg{Some(msg)=>pending.push_back(msg),None=>break},
+                msg=frames.recv(),if frames_open=>match msg{Some(msg)=>frame=Some(msg),None=>frames_open=false},
+                _=tokio::time::sleep(Duration::from_millis(10))=>{},
+            }
+            continue;
+        };
+        if bincode_size(&message) > crate::flow::MAX_DATA_MESSAGE {
+            message = match message {
+                ServerMessage::DirListing { request_id, .. } => ServerMessage::FileError {
+                    request_id,
+                    task_id: 0,
+                    message: "流畅模式单次目录结果过大，请切回兼顾模式浏览该目录".into(),
+                },
+                _ => anyhow::bail!("flow message exceeds bounded packet size"),
+            };
+        }
+        budget.charge(bincode_size(&message), false).await;
+        let write_started = std::time::Instant::now();
+        tokio::time::timeout(Duration::from_secs(5), write_message(&mut writer, &message))
+            .await??;
+        budget.observe_write(write_started.elapsed());
     }
     Ok(())
 }
@@ -779,7 +952,7 @@ async fn send_file_error(
         .await;
 }
 
-fn unix_now() -> i64 {
+pub(crate) fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)

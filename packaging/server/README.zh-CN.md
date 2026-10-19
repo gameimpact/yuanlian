@@ -1,6 +1,6 @@
-# 远联控制服务端 0.2.0（Linux x86_64）
+# 远联控制服务端 0.3.0（Linux x86_64）
 
-本包提供账号、邀请注册、设备目录、一次性设备令牌、配对、Ed25519 会话票据、活动会话撤销、审计与 Web 后台。**它不是中继，不转发屏幕/输入/文件内容。**
+本包为 0.3.0 控制服务端（协议 v3），提供账号、邀请注册、设备目录、一次性设备令牌、配对、Ed25519 会话票据、活动会话撤销、审计与 Web 后台。**它不是中继，不转发屏幕/输入/文件内容。**
 
 ## Linux 服务端一键安装（Ubuntu/Debian x86_64）
 
@@ -9,15 +9,15 @@
 在线一键安装（Linux 控制服务端）：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/gameimpact/yuanlian/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/gameimpact/yuanlian/v0.3.0/install.sh)
 ```
 
-下载固定 v0.2.0 服务端包并校验发布清单 SHA-256，再安装并检查服务；需要时调用 sudo。已有部署会拒绝覆盖，请先备份并手动升级。命令末尾加 `--check` 可只下载并校验，不安装。
+下载固定 v0.3.0 服务端包并校验发布清单 SHA-256，再安装并检查服务；需要时调用 sudo。已有部署会拒绝覆盖，请先备份并手动升级。命令末尾加 `--check` 可只下载并校验，不安装。v0.3.0 Release 目前只提供 Linux 控制服务端；桌面客户端安装包仍为 v0.2.0。
 
-离线安装：将可信来源的 `yl-server-0.2.0-linux-x86_64.tar.gz` 放到当前目录后，执行一行命令：
+离线安装：将可信来源的 `yl-server-0.3.0-linux-x86_64.tar.gz` 放到当前目录后，执行一行命令：
 
 ```bash
-tar -xzf yl-server-0.2.0-linux-x86_64.tar.gz && sudo bash ./yl-server-0.2.0-linux-x86_64/scripts/install.sh
+tar -xzf yl-server-0.3.0-linux-x86_64.tar.gz && sudo bash ./yl-server-0.3.0-linux-x86_64/scripts/install.sh
 ```
 
 需要运行 systemd 的 Ubuntu/Debian x86_64、glibc 与 sudo/root 权限；无需安装 Rust、Flutter 或 Docker。
@@ -25,8 +25,8 @@ tar -xzf yl-server-0.2.0-linux-x86_64.tar.gz && sudo bash ./yl-server-0.2.0-linu
 也可分步执行：
 
 ```bash
-tar xzf yl-server-0.2.0-linux-x86_64.tar.gz
-cd yl-server-0.2.0-linux-x86_64
+tar xzf yl-server-0.3.0-linux-x86_64.tar.gz
+cd yl-server-0.3.0-linux-x86_64
 sudo bash ./scripts/install.sh
 curl http://127.0.0.1:18080/health
 ```

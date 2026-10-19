@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 import 'bincode.dart';
 
-const int protocolVersion = 2;
+const int protocolVersion = 3;
 const int defaultPort = 24800;
 const String tlsServerName = 'yuanlian.local';
 const int maxMessageBytes = 32 * 1024 * 1024;
@@ -123,11 +123,13 @@ class FrameMessage {
     required this.width,
     required this.height,
     required this.tiles,
+    this.progressive = false,
   });
 
   final int seq;
   final int generation;
   final bool full;
+  final bool progressive;
   final int width;
   final int height;
   final List<TileData> tiles;
@@ -268,10 +270,33 @@ final class FileErrorReceived extends ServerMessage {
   final String message;
 }
 
+final class QualityReadyReceived extends ServerMessage {
+  const QualityReadyReceived(
+    this.port,
+    this.serverCertificate,
+    this.serverUuid,
+    this.permissions,
+    this.inputAllowed,
+  );
+  final int port;
+  final String serverCertificate;
+  final String serverUuid;
+  final int permissions;
+  final bool inputAllowed;
+}
+
 ServerMessage decodeServerMessage(Uint8List payload) {
   final reader = ByteReader(payload);
   final tag = reader.u32();
   final message = switch (tag) {
+    13 => _decodeFrame(reader, progressive: true),
+    12 => QualityReadyReceived(
+      reader.u16(),
+      reader.string(),
+      reader.string(),
+      reader.u32(),
+      reader.boolean(),
+    ),
     _serverWelcome => _decodeWelcome(reader),
     _serverFrame => _decodeFrame(reader),
     _serverCursor => _decodeCursor(reader),
@@ -279,30 +304,30 @@ ServerMessage decodeServerMessage(Uint8List payload) {
     _serverError => _decodeError(reader),
     _serverBye => ByeReceived(reader.string()),
     _serverFileCapabilities => FileCapabilitiesReceived(
-        reader.boolean(),
-        reader.string(),
-        read: reader.boolean(),
-        write: reader.boolean(),
-        delete: reader.boolean(),
-      ),
+      reader.boolean(),
+      reader.string(),
+      read: reader.boolean(),
+      write: reader.boolean(),
+      delete: reader.boolean(),
+    ),
     _serverDirListing => _decodeDirListing(reader),
     _serverFileChunk => FileChunkReceived(
-        reader.u64(),
-        reader.u64(),
-        reader.bytes(),
-      ),
+      reader.u64(),
+      reader.u64(),
+      reader.bytes(),
+    ),
     _serverUploadAck => UploadAckReceived(reader.u64(), reader.u64()),
     _serverFileDone => FileDoneReceived(
-        reader.u64(),
-        reader.string(),
-        reader.u64(),
-        reader.string(),
-      ),
+      reader.u64(),
+      reader.string(),
+      reader.u64(),
+      reader.string(),
+    ),
     _serverFileError => FileErrorReceived(
-        reader.u64(),
-        reader.u64(),
-        reader.string(),
-      ),
+      reader.u64(),
+      reader.u64(),
+      reader.string(),
+    ),
     _ => throw ProtocolException('unknown server message tag $tag'),
   };
   reader.expectEnd();
@@ -330,7 +355,7 @@ WelcomeReceived _decodeWelcome(ByteReader reader) {
   );
 }
 
-FrameReceived _decodeFrame(ByteReader reader) {
+FrameReceived _decodeFrame(ByteReader reader, {bool progressive = false}) {
   final seq = reader.u64();
   final generation = reader.u32();
   final full = reader.boolean();
@@ -360,6 +385,7 @@ FrameReceived _decodeFrame(ByteReader reader) {
       width: width,
       height: height,
       tiles: tiles,
+      progressive: progressive,
     ),
   );
 }
@@ -371,10 +397,7 @@ CursorReceived _decodeCursor(ByteReader reader) {
 }
 
 HostError _decodeError(ByteReader reader) {
-  return HostError(
-    ErrorCode.fromIndex(reader.u32()),
-    reader.string(),
-  );
+  return HostError(ErrorCode.fromIndex(reader.u32()), reader.string());
 }
 
 DirListingReceived _decodeDirListing(ByteReader reader) {
@@ -406,6 +429,8 @@ Uint8List encodeHello({
   int features = featureFileTransfer | featureTextInput | featureSessionTicket,
   String? sessionTicket,
   String sessionNonce = '',
+  String mode = 'tiles',
+  String qualityCertificate = '',
 }) {
   final writer = ByteWriter()
     ..u32(_clientHello)
@@ -421,7 +446,10 @@ Uint8List encodeHello({
       ..boolean(true)
       ..string(sessionTicket);
   }
-  writer.string(sessionNonce);
+  writer
+    ..string(sessionNonce)
+    ..string(mode)
+    ..string(qualityCertificate);
   return writer.toBytes();
 }
 
@@ -502,12 +530,7 @@ Uint8List encodeFileDownload(int taskId, String path) {
   return writer.toBytes();
 }
 
-Uint8List encodeUploadStart(
-  int taskId,
-  String path,
-  int size,
-  bool overwrite,
-) {
+Uint8List encodeUploadStart(int taskId, String path, int size, bool overwrite) {
   final writer = ByteWriter()
     ..u32(_clientUploadStart)
     ..u64(taskId)
@@ -553,8 +576,7 @@ Uint8List framePayload(Uint8List payload) {
     throw ProtocolException('message too large: ${payload.length}');
   }
   final framed = Uint8List(4 + payload.length);
-  ByteData.sublistView(framed, 0, 4)
-      .setUint32(0, payload.length, Endian.big);
+  ByteData.sublistView(framed, 0, 4).setUint32(0, payload.length, Endian.big);
   framed.setRange(4, framed.length, payload);
   return framed;
 }

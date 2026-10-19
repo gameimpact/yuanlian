@@ -193,7 +193,7 @@ impl ControlPlane {
             "host_instance": self.host_instance,
             "request_input": request_input,
             "input_allowed": input_allowed,
-            "path": "direct_tcp_tls",
+            "path": if claims.mode == "quality" {"moonlight_sunshine_control_tls"} else if claims.mode == "flow" {"flow_direct_tcp_tls"} else {"direct_tcp_tls"},
         });
         let url = format!(
             "{}/api/v1/devices/{}/sessions",
@@ -449,6 +449,7 @@ mod tests {
             user: "alice".into(),
             jti: "session-1".into(),
             purpose: TICKET_PURPOSE.into(),
+            mode: "tiles".into(),
             nonce_sha256: nonce_sha256(&nonce),
             permissions: yl_proto::PERMISSION_VIEW,
             iat: now,

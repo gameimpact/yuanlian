@@ -8,6 +8,7 @@ import '../models/session_auth.dart';
 import '../net/server_client.dart';
 import '../platform/credential_store.dart';
 import 'connection_progress_page.dart';
+import 'quality_broker_page.dart';
 import 'design_tokens.dart';
 import 'widgets.dart';
 
@@ -35,6 +36,7 @@ class _AccountPageState extends State<AccountPage> {
   final Set<String> _expandedDevices = <String>{};
   bool _loading = true;
   bool _busy = false;
+  String _mode = 'tiles';
   bool _registerMode = false;
   String? _error;
   String? _notice;
@@ -42,9 +44,7 @@ class _AccountPageState extends State<AccountPage> {
   @override
   void initState() {
     super.initState();
-    _serverController.text = Platform.isAndroid
-        ? ''
-        : 'http://127.0.0.1:18080';
+    _serverController.text = Platform.isAndroid ? '' : 'http://127.0.0.1:18080';
     _pairingController.addListener(_onPairingChanged);
     _restoreSession();
   }
@@ -269,14 +269,18 @@ class _AccountPageState extends State<AccountPage> {
     }
   }
 
-  Future<SessionAuth?> _createAuth(DeviceInfo device) async {
+  Future<SessionAuth?> _createAuth(DeviceInfo device, {String? mode}) async {
     final api = _api;
     if (api == null) {
       return null;
     }
     final nonce = _newNonce();
     try {
-      final ticket = await api.sessionTicket(device.deviceId, nonce);
+      final ticket = await api.sessionTicket(
+        device.deviceId,
+        nonce,
+        mode: mode ?? _mode,
+      );
       return SessionAuth(
         ticket: ticket.ticket,
         nonce: nonce,
@@ -294,11 +298,13 @@ class _AccountPageState extends State<AccountPage> {
   }
 
   Future<void> _connect(DeviceInfo device) async {
-    final auth = await _createAuth(device);
+    final mode = _mode;
+    final auth = await _createAuth(device, mode: mode);
     if (auth == null || !mounted) {
       return;
     }
     final profile = ConnectionProfile(
+      mode: mode,
       name: device.name,
       address: device.address,
       fingerprint: device.fingerprint,
@@ -306,12 +312,18 @@ class _AccountPageState extends State<AccountPage> {
     );
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => ConnectionProgressPage(
-          profile: profile,
-          sessionAuth: auth,
-          onRefreshAuth: () => _createAuth(device),
-          onConnected: widget.onConnected,
-        ),
+        builder: (_) => profile.mode == 'quality'
+            ? QualityBrokerPage(
+                profile: profile,
+                auth: auth,
+                onRefreshAuth: () => _createAuth(device, mode: mode),
+              )
+            : ConnectionProgressPage(
+                profile: profile,
+                sessionAuth: auth,
+                onRefreshAuth: () => _createAuth(device, mode: mode),
+                onConnected: widget.onConnected,
+              ),
       ),
     );
     if (mounted) {
@@ -564,11 +576,8 @@ class _AccountPageState extends State<AccountPage> {
         ),
         actions: [
           TextButton.icon(
-            onPressed: () => copyText(
-              context,
-              registered.deviceToken,
-              label: '设备令牌已复制',
-            ),
+            onPressed: () =>
+                copyText(context, registered.deviceToken, label: '设备令牌已复制'),
             icon: const Icon(Icons.copy_rounded, size: 16),
             label: const Text('复制'),
           ),
@@ -626,7 +635,10 @@ class _AccountPageState extends State<AccountPage> {
             color: YlStatus.success,
             text: _notice!,
           ),
-        if (account == null) _buildLogin(theme) else _buildAccount(theme, account),
+        if (account == null)
+          _buildLogin(theme)
+        else
+          _buildAccount(theme, account),
       ],
     );
   }
@@ -691,9 +703,11 @@ class _AccountPageState extends State<AccountPage> {
                         height: 16,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : Icon(_registerMode
-                        ? Icons.person_add_alt_1_rounded
-                        : Icons.login_rounded),
+                    : Icon(
+                        _registerMode
+                            ? Icons.person_add_alt_1_rounded
+                            : Icons.login_rounded,
+                      ),
                 label: Text(_busy ? '处理中' : (_registerMode ? '注册并登录' : '登录')),
               ),
               const SizedBox(width: 10),
@@ -772,6 +786,32 @@ class _AccountPageState extends State<AccountPage> {
                 ],
               ),
               const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _mode,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: '新连接的模式（需要 v3 Host）',
+                ),
+                items: [
+                  const DropdownMenuItem(
+                    value: 'tiles',
+                    child: Text('兼顾质量和流畅 · 图块'),
+                  ),
+                  const DropdownMenuItem(
+                    value: 'flow',
+                    child: Text('流畅 · 低带宽渐进图块'),
+                  ),
+                  if (Platform.isWindows)
+                    const DropdownMenuItem(
+                      value: 'quality',
+                      child: Text('质量 · 视频串流 · Host 票据授权'),
+                    ),
+                ],
+                onChanged: _busy
+                    ? null
+                    : (value) => setState(() => _mode = value ?? 'tiles'),
+              ),
+              const SizedBox(height: 12),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -794,10 +834,9 @@ class _AccountPageState extends State<AccountPage> {
                     ),
                   ),
                   OutlinedButton.icon(
-                    onPressed:
-                        _busy || _pairingController.text.trim().isEmpty
-                            ? null
-                            : _claimPairing,
+                    onPressed: _busy || _pairingController.text.trim().isEmpty
+                        ? null
+                        : _claimPairing,
                     icon: const Icon(Icons.qr_code_2_rounded, size: 18),
                     label: const Text('领取配对'),
                   ),
@@ -915,15 +954,15 @@ class _AccountPageState extends State<AccountPage> {
               OutlinedButton.icon(
                 onPressed: _busy ? null : () => _toggleSessions(device),
                 icon: Icon(
-                  expanded
-                      ? Icons.expand_less_rounded
-                      : Icons.podcasts_rounded,
+                  expanded ? Icons.expand_less_rounded : Icons.podcasts_rounded,
                   size: 18,
                 ),
                 label: const Text('活动会话'),
               ),
               OutlinedButton.icon(
-                onPressed: active && !_busy ? () => _revokeDevice(device) : null,
+                onPressed: active && !_busy
+                    ? () => _revokeDevice(device)
+                    : null,
                 icon: const Icon(Icons.block_rounded, size: 18),
                 label: const Text('撤销设备'),
               ),
@@ -1049,7 +1088,11 @@ class _Banner extends StatelessWidget {
 }
 
 class _StatusPill extends StatelessWidget {
-  const _StatusPill({this.active = false, this.online = false, this.shared = false});
+  const _StatusPill({
+    this.active = false,
+    this.online = false,
+    this.shared = false,
+  });
   final bool active;
   final bool online;
   final bool shared;
@@ -1070,13 +1113,13 @@ class _StatusPill extends StatelessWidget {
     final color = !active
         ? YlStatus.offline
         : online
-            ? YlStatus.success
-            : YlStatus.warning;
+        ? YlStatus.success
+        : YlStatus.warning;
     final label = !active
         ? '已撤销'
         : online
-            ? '在线'
-            : '离线';
+        ? '在线'
+        : '离线';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
       decoration: BoxDecoration(

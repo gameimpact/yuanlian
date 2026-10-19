@@ -5,6 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+serde.workspace = true
+bincode.workspace = true
+socket2 = "0.6"
+yl-runtime = { path = "../yl-runtime" }
+tempfile = "3"
 yl-proto = { path = "../yl-proto" }
 yl-tiles = { path = "../yl-tiles" }
 anyhow.workspace = true
@@ -18,10 +23,12 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 xcap.workspace = true
 windows.workspace = true
+windows-capture = "2.0.1"
 sha2.workspace = true
 hex.workspace = true
 serde_json.workspace = true
 ureq.workspace = true
+rayon.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

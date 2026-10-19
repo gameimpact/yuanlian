@@ -1,0 +1,9 @@
+# Upstream release assets and extracted binaries are never committed; the
+# reproducible package script verifies pinned SHA-256 values instead.
+*.zip
+moonlight/
+sunshine/
+source-checkouts/
+*.exe
+*.dll
+*.log

@@ -80,6 +80,7 @@ class WorkspacePageState extends State<WorkspacePage>
   Offset _pinchStartFocal = Offset.zero;
   Offset _pinchStartPan = Offset.zero;
 
+  int _presentedFrames = 0;
   int _lastFrames = 0;
   int _lastBytes = 0;
   DateTime _lastStatsAt = DateTime.now();
@@ -106,6 +107,9 @@ class WorkspacePageState extends State<WorkspacePage>
   int get debugPendingFrames => _frameQueue.length;
 
   @visibleForTesting
+  int get debugPresentedFrames => _presentedFrames;
+
+  @visibleForTesting
   String? get debugFrameFault => _frameFault;
 
   @override
@@ -113,7 +117,7 @@ class WorkspacePageState extends State<WorkspacePage>
     super.initState();
     _remoteWidth = _client.welcome?.screenWidth ?? 0;
     _remoteHeight = _client.welcome?.screenHeight ?? 0;
-    _lastFrames = _client.framesReceived;
+    _lastFrames = 0;
     _lastBytes = _client.bytesReceived;
     WidgetsBinding.instance.addObserver(this);
     _events = _client.events.listen(_onEvent);
@@ -128,7 +132,10 @@ class WorkspacePageState extends State<WorkspacePage>
       );
     }
     _client.requestKeyframe();
-    _statsTimer = Timer.periodic(const Duration(seconds: 1), (_) => _tickStats());
+    _statsTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _tickStats(),
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         _focusNode.requestFocus();
@@ -206,10 +213,7 @@ class WorkspacePageState extends State<WorkspacePage>
     final imageHeight = _remoteHeight * scale;
     final maxX = math.max(0.0, (imageWidth - _canvasSize.width) / 2);
     final maxY = math.max(0.0, (imageHeight - _canvasSize.height) / 2);
-    return Offset(
-      pan.dx.clamp(-maxX, maxX),
-      pan.dy.clamp(-maxY, maxY),
-    );
+    return Offset(pan.dx.clamp(-maxX, maxX), pan.dy.clamp(-maxY, maxY));
   }
 
   void _setZoom(double zoom) {
@@ -262,8 +266,10 @@ class WorkspacePageState extends State<WorkspacePage>
     final points = _pointers.values.take(2).toList();
     final distance = (points[0] - points[1]).distance;
     final focal = (points[0] + points[1]) / 2;
-    final nextZoom =
-        (_pinchStartZoom * (distance / _pinchStartDistance)).clamp(1.0, 4.0);
+    final nextZoom = (_pinchStartZoom * (distance / _pinchStartDistance)).clamp(
+      1.0,
+      4.0,
+    );
     final nextPan = _pinchStartPan + (focal - _pinchStartFocal);
     setState(() {
       _zoom = nextZoom;
@@ -467,6 +473,7 @@ class WorkspacePageState extends State<WorkspacePage>
           _requestFullFrame();
           break;
         }
+        _presentedFrames += 1;
       }
     } finally {
       _decoding = false;
@@ -548,7 +555,8 @@ class WorkspacePageState extends State<WorkspacePage>
       }
       final key = (tile.x, tile.y);
       final previous = _tiles[key];
-      final nextPixels = _cachePixels -
+      final nextPixels =
+          _cachePixels -
           (previous == null ? 0 : previous.width * previous.height) +
           image.width * image.height;
       final nextCount = _tiles.length + (previous == null ? 1 : 0);
@@ -615,7 +623,7 @@ class WorkspacePageState extends State<WorkspacePage>
     if (seconds <= 0) {
       return;
     }
-    final frames = _client.framesReceived;
+    final frames = _presentedFrames;
     final bytes = _client.bytesReceived;
     setState(() {
       _fps = (frames - _lastFrames) / seconds;
@@ -676,12 +684,14 @@ class WorkspacePageState extends State<WorkspacePage>
       return;
     }
     _pointerInsideImage = true;
-    final x = ((localPosition.dx - rect.left) / _viewport.scale)
-        .floor()
-        .clamp(0, _remoteWidth - 1);
-    final y = ((localPosition.dy - rect.top) / _viewport.scale)
-        .floor()
-        .clamp(0, _remoteHeight - 1);
+    final x = ((localPosition.dx - rect.left) / _viewport.scale).floor().clamp(
+      0,
+      _remoteWidth - 1,
+    );
+    final y = ((localPosition.dy - rect.top) / _viewport.scale).floor().clamp(
+      0,
+      _remoteHeight - 1,
+    );
     if (_lastRemotePointer == (x, y)) {
       return;
     }
@@ -714,7 +724,9 @@ class WorkspacePageState extends State<WorkspacePage>
     if (!_controlMode) {
       return;
     }
-    _debugPointer('hover buttons=${event.buttons} local=${event.localPosition}');
+    _debugPointer(
+      'hover buttons=${event.buttons} local=${event.localPosition}',
+    );
     _updateMouse(event.localPosition);
   }
 
@@ -877,13 +889,15 @@ class WorkspacePageState extends State<WorkspacePage>
     if (welcome == null) {
       return;
     }
-    final fingerprint = widget.profile.fingerprint.replaceAll(':', '').toUpperCase();
+    final fingerprint = widget.profile.fingerprint
+        .replaceAll(':', '')
+        .toUpperCase();
     final rows = <(String, String)>[
       ('Host', welcome.hostName),
       ('Host ID', welcome.hostId),
       ('地址', widget.profile.address),
       ('屏幕', '${welcome.screenWidth} × ${welcome.screenHeight}'),
-      ('模式', welcome.mode),
+      ('模式', welcome.mode == 'flow' ? '流畅 · 渐进图块（空白区域待刷新）' : welcome.mode),
       ('图块', '${welcome.tileSize} px'),
       ('协议', 'v${welcome.protocolVersion} · ALPN yuanlian/1'),
       (
@@ -931,11 +945,7 @@ class WorkspacePageState extends State<WorkspacePage>
         ),
         actions: [
           TextButton.icon(
-            onPressed: () => copyText(
-              context,
-              diagnostics,
-              label: '已复制脱敏会话信息',
-            ),
+            onPressed: () => copyText(context, diagnostics, label: '已复制脱敏会话信息'),
             icon: const Icon(Icons.copy_rounded, size: 16),
             label: const Text('复制'),
           ),
@@ -955,76 +965,77 @@ class WorkspacePageState extends State<WorkspacePage>
       backgroundColor: YlRemoteColors.background,
       body: SafeArea(
         child: Column(
-        children: [
-          _buildToolbar(theme),
-          if (_lifecycleSuspended && _client.inputAllowed)
-            _buildSuspendedBanner(),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                _canvasSize = constraints.biggest;
-                _viewport = _Viewport.forSize(
-                  constraints.biggest,
-                  _remoteWidth,
-                  _remoteHeight,
-                  zoom: _zoom,
-                  pan: _pan,
-                );
-                return Focus(
-                  focusNode: _focusNode,
-                  autofocus: true,
-                  onKeyEvent: _handleKey,
-                  onFocusChange: _onFocusChange,
-                  child: Listener(
-                    behavior: HitTestBehavior.opaque,
-                    onPointerDown: _onPointerDown,
-                    onPointerHover: _onPointerHover,
-                    onPointerMove: _onPointerMove,
-                    onPointerUp: _onPointerUp,
-                    onPointerCancel: _onPointerCancel,
-                    onPointerSignal: _onPointerSignal,
-                    child: MouseRegion(
-                      cursor: !_controlMode
-                        ? SystemMouseCursors.grab
-                        : _inputEnabled && _hasFocus
+          children: [
+            _buildToolbar(theme),
+            if (_lifecycleSuspended && _client.inputAllowed)
+              _buildSuspendedBanner(),
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  _canvasSize = constraints.biggest;
+                  _viewport = _Viewport.forSize(
+                    constraints.biggest,
+                    _remoteWidth,
+                    _remoteHeight,
+                    zoom: _zoom,
+                    pan: _pan,
+                  );
+                  return Focus(
+                    focusNode: _focusNode,
+                    autofocus: true,
+                    onKeyEvent: _handleKey,
+                    onFocusChange: _onFocusChange,
+                    child: Listener(
+                      behavior: HitTestBehavior.opaque,
+                      onPointerDown: _onPointerDown,
+                      onPointerHover: _onPointerHover,
+                      onPointerMove: _onPointerMove,
+                      onPointerUp: _onPointerUp,
+                      onPointerCancel: _onPointerCancel,
+                      onPointerSignal: _onPointerSignal,
+                      child: MouseRegion(
+                        cursor: !_controlMode
+                            ? SystemMouseCursors.grab
+                            : _inputEnabled && _hasFocus
                             ? SystemMouseCursors.none
                             : SystemMouseCursors.basic,
-                      onExit: (_) {
-                        _releaseButtons();
-                        _lastRemotePointer = null;
-                      },
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          RepaintBoundary(
-                            child: CustomPaint(
-                              painter: _RemotePainter(
-                                tiles: _tiles,
-                                viewport: _viewport,
-                                cursor: _cursor,
-                                showCursor: _remoteWidth > 0,
+                        onExit: (_) {
+                          _releaseButtons();
+                          _lastRemotePointer = null;
+                        },
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            RepaintBoundary(
+                              child: CustomPaint(
+                                painter: _RemotePainter(
+                                  tiles: _tiles,
+                                  viewport: _viewport,
+                                  cursor: _cursor,
+                                  showCursor: _remoteWidth > 0,
+                                ),
                               ),
                             ),
-                          ),
-                          if (_waitingFirstFrame && _disconnectReason == null)
-                            _WaitingOverlay(message: _frameFault),
-                          if (_disconnectReason != null)
-                            _DisconnectedOverlay(
-                              reason: _disconnectReason!,
-                              onBack: () => Navigator.of(context)
-                                  .popUntil((route) => route.isFirst),
-                            ),
-                        ],
+                            if (_waitingFirstFrame && _disconnectReason == null)
+                              _WaitingOverlay(message: _frameFault),
+                            if (_disconnectReason != null)
+                              _DisconnectedOverlay(
+                                reason: _disconnectReason!,
+                                onBack: () =>
+                                    Navigator.of(context)
+                                        .popUntil((route) => route.isFirst),
+                              ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
-          ),
-          _buildStatusBar(theme),
-        ],
-      ),
+            _buildStatusBar(theme),
+          ],
+        ),
       ),
     );
   }
@@ -1036,9 +1047,7 @@ class WorkspacePageState extends State<WorkspacePage>
         child: Row(
           children: [
             Icon(
-              _controlMode
-                  ? Icons.visibility_outlined
-                  : Icons.mouse_rounded,
+              _controlMode ? Icons.visibility_outlined : Icons.mouse_rounded,
               size: 18,
             ),
             const SizedBox(width: 10),
@@ -1085,9 +1094,7 @@ class WorkspacePageState extends State<WorkspacePage>
           children: [
             const Icon(Icons.keyboard_alt_outlined, size: 18),
             const SizedBox(width: 10),
-            Text(
-              _client.inputAllowed ? '发送文本…' : '发送文本（无输入权限）',
-            ),
+            Text(_client.inputAllowed ? '发送文本…' : '发送文本（无输入权限）'),
           ],
         ),
       ),
@@ -1137,14 +1144,19 @@ class WorkspacePageState extends State<WorkspacePage>
         padding: const EdgeInsets.symmetric(horizontal: 6),
         decoration: const BoxDecoration(
           color: YlRemoteColors.chrome,
-          border: Border(bottom: BorderSide(color: YlRemoteColors.chromeOutline)),
+          border: Border(
+            bottom: BorderSide(color: YlRemoteColors.chromeOutline),
+          ),
         ),
         child: Row(
           children: [
             IconButton(
               tooltip: '断开并返回',
               onPressed: _leave,
-              icon: const Icon(Icons.arrow_back_rounded, color: YlRemoteColors.textSecondary),
+              icon: const Icon(
+                Icons.arrow_back_rounded,
+                color: YlRemoteColors.textSecondary,
+              ),
             ),
             Container(
               width: 30,
@@ -1174,20 +1186,20 @@ class WorkspacePageState extends State<WorkspacePage>
               label: !_controlMode
                   ? '查看模式'
                   : _inputEnabled
-                      ? '可控制'
-                      : _lifecycleSuspended
-                          ? '已暂停'
-                          : '仅查看',
+                  ? '可控制'
+                  : _lifecycleSuspended
+                  ? '已暂停'
+                  : '仅查看',
               icon: !_controlMode
                   ? Icons.visibility_outlined
                   : _inputEnabled
-                      ? Icons.mouse_rounded
-                      : Icons.visibility_outlined,
+                  ? Icons.mouse_rounded
+                  : Icons.visibility_outlined,
               color: !_controlMode
                   ? YlRemoteColors.viewing
                   : _inputEnabled
-                      ? YlRemoteColors.connected
-                      : YlRemoteColors.viewOnly,
+                  ? YlRemoteColors.connected
+                  : YlRemoteColors.viewOnly,
               onTap: _toggleControlMode,
             ),
             Tooltip(
@@ -1195,9 +1207,7 @@ class WorkspacePageState extends State<WorkspacePage>
               child: IconButton(
                 onPressed: () => _setZoom(_zoom > 1.01 ? 1.0 : 2.0),
                 icon: Icon(
-                  _zoom > 1.01
-                      ? Icons.zoom_out_rounded
-                      : Icons.zoom_in_rounded,
+                  _zoom > 1.01 ? Icons.zoom_out_rounded : Icons.zoom_in_rounded,
                   color: YlRemoteColors.textSecondary,
                 ),
               ),
@@ -1205,7 +1215,10 @@ class WorkspacePageState extends State<WorkspacePage>
             PopupMenuButton<String>(
               tooltip: '会话操作',
               color: YlRemoteColors.chromeRaised,
-              icon: const Icon(Icons.more_vert_rounded, color: YlRemoteColors.textSecondary),
+              icon: const Icon(
+                Icons.more_vert_rounded,
+                color: YlRemoteColors.textSecondary,
+              ),
               onSelected: (value) {
                 if (value == 'toggle-control' ||
                     value == 'zoom-in' ||
@@ -1259,11 +1272,7 @@ class WorkspacePageState extends State<WorkspacePage>
                     children: [
                       const Icon(Icons.folder_outlined, size: 18),
                       const SizedBox(width: 10),
-                      Text(
-                        _client.fileEnabled
-                            ? '文件传输'
-                            : '文件传输（Host 未授权）',
-                      ),
+                      Text(_client.fileEnabled ? '文件传输' : '文件传输（Host 未授权）'),
                     ],
                   ),
                 ),
@@ -1296,7 +1305,10 @@ class WorkspacePageState extends State<WorkspacePage>
           IconButton(
             tooltip: '断开并返回',
             onPressed: _leave,
-            icon: const Icon(Icons.arrow_back_rounded, color: YlRemoteColors.textSecondary),
+            icon: const Icon(
+              Icons.arrow_back_rounded,
+              color: YlRemoteColors.textSecondary,
+            ),
           ),
           const SizedBox(width: 4),
           Container(
@@ -1340,25 +1352,28 @@ class WorkspacePageState extends State<WorkspacePage>
             label: !_controlMode
                 ? '查看模式'
                 : _inputEnabled
-                    ? '可控制'
-                    : _lifecycleSuspended
-                        ? '已暂停'
-                        : '仅查看',
+                ? '可控制'
+                : _lifecycleSuspended
+                ? '已暂停'
+                : '仅查看',
             icon: _client.inputAllowed
                 ? Icons.mouse_rounded
                 : Icons.visibility_outlined,
             color: !_controlMode
                 ? YlRemoteColors.viewing
                 : _inputEnabled
-                    ? YlRemoteColors.connected
-                    : YlRemoteColors.viewOnly,
+                ? YlRemoteColors.connected
+                : YlRemoteColors.viewOnly,
             onTap: _toggleControlMode,
           ),
           const Spacer(),
           PopupMenuButton<String>(
             tooltip: '显示与控制',
             color: YlRemoteColors.chromeRaised,
-            icon: const Icon(Icons.aspect_ratio_rounded, color: YlRemoteColors.textSecondary),
+            icon: const Icon(
+              Icons.aspect_ratio_rounded,
+              color: YlRemoteColors.textSecondary,
+            ),
             onSelected: _handleViewCommand,
             itemBuilder: (context) => _viewMenuItems(),
           ),
@@ -1366,7 +1381,10 @@ class WorkspacePageState extends State<WorkspacePage>
             message: '请求 Host 发送全量帧',
             child: IconButton(
               onPressed: _client.requestKeyframe,
-              icon: const Icon(Icons.refresh_rounded, color: YlRemoteColors.textSecondary),
+              icon: const Icon(
+                Icons.refresh_rounded,
+                color: YlRemoteColors.textSecondary,
+              ),
             ),
           ),
           Tooltip(
@@ -1395,7 +1413,10 @@ class WorkspacePageState extends State<WorkspacePage>
             message: '会话详情与诊断',
             child: IconButton(
               onPressed: _showDetails,
-              icon: const Icon(Icons.info_outline_rounded, color: YlRemoteColors.textSecondary),
+              icon: const Icon(
+                Icons.info_outline_rounded,
+                color: YlRemoteColors.textSecondary,
+              ),
             ),
           ),
           const SizedBox(width: 6),
@@ -1423,8 +1444,8 @@ class WorkspacePageState extends State<WorkspacePage>
     final state = _disconnectReason != null
         ? '连接中断'
         : _waitingFirstFrame
-            ? '等待首帧'
-            : '实时画面';
+        ? '等待首帧'
+        : '实时画面';
     final compact = MediaQuery.sizeOf(context).width < 800;
     if (compact) {
       return Container(
@@ -1497,7 +1518,11 @@ class WorkspacePageState extends State<WorkspacePage>
           const SizedBox(width: 16),
           Text('RTT ${_client.rttMs} ms', style: mono),
           const Spacer(),
-          const Icon(Icons.lock_outline_rounded, size: 12, color: YlRemoteColors.textDisabled),
+          const Icon(
+            Icons.lock_outline_rounded,
+            size: 12,
+            color: YlRemoteColors.textDisabled,
+          ),
           const SizedBox(width: 5),
           Text('TLS 已固定 · 直连', style: mono),
         ],
@@ -1524,10 +1549,7 @@ class _Viewport {
         size.height <= 0) {
       return const _Viewport(Rect.zero, 1);
     }
-    final base = math.min(
-      size.width / remoteWidth,
-      size.height / remoteHeight,
-    );
+    final base = math.min(size.width / remoteWidth, size.height / remoteHeight);
     final scale = base * zoom;
     final width = remoteWidth * scale;
     final height = remoteHeight * scale;
@@ -1665,7 +1687,10 @@ class _WaitingOverlay extends StatelessWidget {
                       message == null
                           ? '正在等待 Host 采集与编码首幅画面'
                           : '首帧未通过校验（$message），正在请求完整刷新',
-                      style: const TextStyle(color: YlRemoteColors.textTertiary, fontSize: 12),
+                      style: const TextStyle(
+                        color: YlRemoteColors.textTertiary,
+                        fontSize: 12,
+                      ),
                     ),
                   ],
                 ),
@@ -1717,7 +1742,10 @@ class _DisconnectedOverlay extends StatelessWidget {
               const SizedBox(height: 10),
               Text(
                 reason,
-                style: const TextStyle(color: YlRemoteColors.textSecondary, fontSize: 13),
+                style: const TextStyle(
+                  color: YlRemoteColors.textSecondary,
+                  fontSize: 13,
+                ),
               ),
               const SizedBox(height: 18),
               Align(
@@ -1780,10 +1808,7 @@ class _DarkPill extends StatelessWidget {
       message: '切换查看/控制模式',
       child: GestureDetector(
         onTap: onTap,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: content,
-        ),
+        child: MouseRegion(cursor: SystemMouseCursors.click, child: content),
       ),
     );
   }

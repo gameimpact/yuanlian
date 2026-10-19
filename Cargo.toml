@@ -2,6 +2,7 @@
 resolver = "2"
 exclude = ["server"]
 members = [
+    "crates/yl-runtime",
     "crates/yl-proto",
     "crates/yl-tiles",
     "crates/yl-host",
@@ -9,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/gameimpact/yuanlian"
@@ -40,6 +41,7 @@ sha2 = "0.10"
 hex = "0.4"
 ring = "0.17"
 base64 = "0.22"
+rayon = "1"
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 minifb = "0.29"
 

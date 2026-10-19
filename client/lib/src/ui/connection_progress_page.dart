@@ -122,7 +122,7 @@ class _ConnectionProgressPageState extends State<ConnectionProgressPage> {
       RemotePhase.resolving => 0,
       RemotePhase.connecting => 1,
       RemotePhase.securing => 2,
-      RemotePhase.waitingWelcome => 3,
+      RemotePhase.waitingWelcome || RemotePhase.qualityAuthorized => 3,
       RemotePhase.waitingFirstFrame => 4,
       RemotePhase.ready => 5,
       RemotePhase.failed || RemotePhase.disconnected => -1,

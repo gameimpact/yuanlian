@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -28,7 +30,8 @@ Future<void> main(List<String> args) async {
   String? name = buildName.isEmpty ? null : buildName;
   var inputSelfTest = const bool.fromEnvironment('YUANLIAN_INPUT_SELF_TEST');
   var autoOpenFiles = buildOpenFiles;
-  String? ticket;
+  String? ticket = Platform.environment['YUANLIAN_SESSION_TICKET'];
+  var mode = 'tiles';
   String nonce = '';
   for (var i = 0; i < args.length; i++) {
     switch (args[i]) {
@@ -39,6 +42,11 @@ Future<void> main(List<String> args) async {
       case '--auto-connect-fingerprint':
         if (i + 1 < args.length) {
           fingerprint = args[++i];
+        }
+      case '--auto-connect-mode':
+        if (i + 1 < args.length &&
+            ['tiles', 'flow', 'quality'].contains(args[i + 1])) {
+          mode = args[++i];
         }
       case '--auto-connect-name':
         if (i + 1 < args.length) {
@@ -62,6 +70,7 @@ Future<void> main(List<String> args) async {
       ? ConnectionProfile(
           name: (name ?? '').trim().isEmpty ? '自动连接' : name!,
           address: address,
+          mode: mode,
           fingerprint: fingerprint.toUpperCase(),
         )
       : null;
@@ -140,11 +149,11 @@ class _YuanLianAppState extends State<YuanLianApp> {
           value: SystemUiOverlayStyle(
             statusBarColor: Colors.transparent,
             systemNavigationBarColor: Colors.transparent,
-            statusBarIconBrightness:
-                dark ? Brightness.light : Brightness.dark,
+            statusBarIconBrightness: dark ? Brightness.light : Brightness.dark,
             statusBarBrightness: dark ? Brightness.dark : Brightness.light,
-            systemNavigationBarIconBrightness:
-                dark ? Brightness.light : Brightness.dark,
+            systemNavigationBarIconBrightness: dark
+                ? Brightness.light
+                : Brightness.dark,
             systemNavigationBarContrastEnforced: false,
           ),
           child: child ?? const SizedBox.shrink(),

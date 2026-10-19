@@ -17,6 +17,17 @@
 
 解压 `YuanLian-0.2.0-windows-x64-portable.zip` 到任意可写目录（支持空格/中文路径），运行 `client\yuanlian_client.exe`；Host/Viewer 在 `bin\`。不需要源码目录或开发工具。
 
+### 质量档（Moonlight 社区预览，单独包）
+
+主安装器**不包含** GPL 二进制。质量档使用上游 Moonlight-qt 6.2.0 + Sunshine 2026.914.233613，
+单独下载 `quality-preview/yuanlian-quality-preview-0.2.0-windows-x64.zip`：
+
+1. 解压到 `%LOCALAPPDATA%\Programs\YuanLian\quality-preview`（或设置环境变量 `YUANLIAN_QUALITY_PREVIEW` 指向该目录）。
+2. 被控机运行 `sunshine\sunshine.exe`，通过 Moonlight 的 PIN 完成配对。
+3. 客户端首页 → 模式与开发计划 → 质量模式（Moonlight 社区预览）→ 打开预览 → 启动。
+
+该路径使用 Moonlight 自己的配对/加密，不经过远联账号、票据、Host 本机确认或中心撤权；仅限可信局域网、社区非商用。不要把它当作已通过远联安全闭环的正式质量模式。
+
 ### Host 配置（票据模式）
 
 1. 在控制服务端 Web/客户端登录，登记设备：填写 `bin\yl-host.exe --print-identity` 打印的指纹和监听地址。
@@ -58,15 +69,15 @@
 在线一键安装（Linux 控制服务端）：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/gameimpact/yuanlian/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/gameimpact/yuanlian/v0.3.0/install.sh)
 ```
 
-脚本下载 v0.2.0 服务端包、校验 SHA-256、安装并检查服务。加 `--check` 可只下载校验；已有部署请先备份并手动升级。
+脚本下载 v0.3.0 服务端包、校验 SHA-256、安装并检查服务。加 `--check` 可只下载校验；已有部署请先备份并手动升级。v0.3.0 Release 目前只提供 Linux 控制服务端；桌面客户端安装包仍为 v0.2.0。
 
-离线安装：将 `server-linux-x86_64/yl-server-0.2.0-linux-x86_64.tar.gz` 复制到 Linux 当前目录，一键解压并安装：
+离线安装：将 `server-linux-x86_64/yl-server-0.3.0-linux-x86_64.tar.gz` 复制到 Linux 当前目录，一键解压并安装：
 
 ```bash
-tar -xzf yl-server-0.2.0-linux-x86_64.tar.gz && sudo bash ./yl-server-0.2.0-linux-x86_64/scripts/install.sh
+tar -xzf yl-server-0.3.0-linux-x86_64.tar.gz && sudo bash ./yl-server-0.3.0-linux-x86_64/scripts/install.sh
 ```
 
 无需安装 Rust/Flutter/Docker。脚本创建 `yuanlian` 用户、复制二进制与 systemd 单元、设置 `YUANLIAN_DB`/`YUANLIAN_BIND`。默认只监听 `127.0.0.1:18080`；通过 SSH 隧道访问 `/admin`，对外访问必须配置 TLS 反向代理。执行 `curl --fail http://127.0.0.1:18080/health` 验证服务。

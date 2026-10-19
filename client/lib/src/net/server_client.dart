@@ -129,8 +129,8 @@ class LoginResult {
 /// reported with their real status/code.
 class ServerApi {
   ServerApi({required String baseUrl, http.Client? client})
-      : baseUrl = _normalizeBase(baseUrl),
-        _client = client ?? http.Client();
+    : baseUrl = _normalizeBase(baseUrl),
+      _client = client ?? http.Client();
 
   final String baseUrl;
   final http.Client _client;
@@ -236,11 +236,15 @@ class ServerApi {
     );
   }
 
-  Future<SessionTicket> sessionTicket(String deviceId, String nonce) async {
+  Future<SessionTicket> sessionTicket(
+    String deviceId,
+    String nonce, {
+    String mode = 'tiles',
+  }) async {
     final json = await _request(
       'POST',
       '/api/v1/devices/$deviceId/session-ticket',
-      body: {'nonce': nonce},
+      body: {'nonce': nonce, 'mode': mode},
     );
     return SessionTicket(
       ticket: _string(json['ticket']),
@@ -268,16 +272,19 @@ class ServerApi {
     if (list is! List) {
       return const <DeviceSession>[];
     }
-    return list.whereType<Map<String, Object?>>().map((item) {
-      return DeviceSession(
-        sessionId: _string(item['session_id']),
-        userId: _int(item['user_id']),
-        user: _string(item['user']),
-        permissions: _int(item['permissions']),
-        startedAt: _int(item['started_at']),
-        revoked: item['revoked'] == true,
-      );
-    }).toList(growable: false);
+    return list
+        .whereType<Map<String, Object?>>()
+        .map((item) {
+          return DeviceSession(
+            sessionId: _string(item['session_id']),
+            userId: _int(item['user_id']),
+            user: _string(item['user']),
+            permissions: _int(item['permissions']),
+            startedAt: _int(item['started_at']),
+            revoked: item['revoked'] == true,
+          );
+        })
+        .toList(growable: false);
   }
 
   Future<int> revokeSessions(String deviceId, {String? sessionId}) async {

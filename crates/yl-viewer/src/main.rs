@@ -1,5 +1,6 @@
 mod keys;
 mod net;
+mod quality;
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -7,6 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, ScaleMode, Window, WindowOptions};
+use rayon::prelude::*;
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -23,6 +25,12 @@ struct Args {
     /// Host 地址，例如 127.0.0.1:24800。
     #[arg(long)]
     connect: String,
+    #[arg(long, default_value="tiles", value_parser=["tiles","flow","quality"])]
+    mode: String,
+    #[arg(long)]
+    moonlight: Option<std::path::PathBuf>,
+    #[arg(long)]
+    view_only: bool,
 
     /// Host 控制台打印的 TLS SHA-256 指纹。
     #[arg(long)]
@@ -59,12 +67,19 @@ fn main() -> Result<()> {
 
     let args = Args::parse();
     let fingerprint = parse_fingerprint(&args.fingerprint).context("invalid --fingerprint")?;
+    if args.mode == "quality" {
+        return quality::run(&args, fingerprint);
+    }
     let (events, handle) = net::spawn_connection(
         args.connect.clone(),
         fingerprint,
         args.name.clone(),
         net::SessionAuth {
-            ticket: args.ticket.clone(),
+            mode: args.mode.clone(),
+            ticket: args
+                .ticket
+                .clone()
+                .or_else(|| std::env::var("YUANLIAN_SESSION_TICKET").ok()),
             nonce: args.nonce.clone(),
         },
     )?;
@@ -193,6 +208,10 @@ struct App {
     host_name: String,
     stats: RateStats,
     last_title_update: Instant,
+    stats_log_at: Instant,
+    presented_frames: u64,
+    presented_at: Instant,
+    frame_ready: bool,
     force_input: bool,
 }
 
@@ -228,7 +247,7 @@ impl App {
             },
         )
         .context("create viewer window")?;
-        window.set_target_fps(30);
+        window.set_target_fps(60);
         // The remote cursor is drawn from Host cursor updates; keeping the
         // local cursor visible would show two pointers.
         window.set_cursor_visibility(false);
@@ -263,6 +282,10 @@ impl App {
                 since: Some(Instant::now()),
             },
             last_title_update: Instant::now(),
+            stats_log_at: Instant::now(),
+            presented_frames: 0,
+            presented_at: Instant::now(),
+            frame_ready: false,
             force_input,
         })
     }
@@ -291,6 +314,10 @@ impl App {
                 self.window
                     .update_with_buffer(&self.display, size.0, size.1)
                     .context("present viewer frame")?;
+                if self.frame_ready {
+                    self.frame_ready = false;
+                    self.presented_frames += 1;
+                }
             }
             self.update_title();
         }
@@ -369,6 +396,7 @@ impl App {
         }
 
         self.stats.frames += 1;
+        self.frame_ready = true;
         self.stats.bytes += frame
             .tiles
             .iter()
@@ -377,42 +405,57 @@ impl App {
 
         let remote_w = self.remote_w as usize;
         let remote_h = self.remote_h as usize;
-        for tile in frame.tiles {
+        // Decode independent JPEG tiles in parallel; at 60 fps a
+        // 3200x2000 update can contain hundreds of tiles and sequential
+        // decode becomes the viewer bottleneck.
+        let decoded = frame
+            .tiles
+            .into_par_iter()
+            .filter_map(|tile| {
+                let tile_w = tile.width as usize;
+                let tile_h = tile.height as usize;
+                if tile_w == 0 || tile_h == 0 || tile.jpeg.is_empty() {
+                    return None;
+                }
+                let x = tile.x as usize;
+                let y = tile.y as usize;
+                if x + tile_w > remote_w || y + tile_h > remote_h {
+                    warn!(
+                        x = tile.x,
+                        y = tile.y,
+                        tile_w,
+                        tile_h,
+                        "tile outside screen bounds"
+                    );
+                    return None;
+                }
+                let decoded =
+                    match image::load_from_memory_with_format(&tile.jpeg, image::ImageFormat::Jpeg)
+                    {
+                        Ok(image) => image.to_rgb8(),
+                        Err(error) => {
+                            warn!(%error, x = tile.x, y = tile.y, "tile JPEG decode failed");
+                            return None;
+                        }
+                    };
+                if decoded.width() as usize != tile_w || decoded.height() as usize != tile_h {
+                    warn!(
+                        decoded = format!("{}x{}", decoded.width(), decoded.height()),
+                        x = tile.x,
+                        y = tile.y,
+                        expected = format!("{tile_w}x{tile_h}"),
+                        "tile dimensions mismatch"
+                    );
+                    return None;
+                }
+                Some((tile, decoded))
+            })
+            .collect::<Vec<_>>();
+        for (tile, decoded) in decoded {
             let tile_w = tile.width as usize;
             let tile_h = tile.height as usize;
-            if tile_w == 0 || tile_h == 0 || tile.jpeg.is_empty() {
-                continue;
-            }
             let x = tile.x as usize;
             let y = tile.y as usize;
-            if x + tile_w > remote_w || y + tile_h > remote_h {
-                warn!(
-                    x = tile.x,
-                    y = tile.y,
-                    tile_w,
-                    tile_h,
-                    "tile outside screen bounds"
-                );
-                continue;
-            }
-            let decoded =
-                match image::load_from_memory_with_format(&tile.jpeg, image::ImageFormat::Jpeg) {
-                    Ok(image) => image.to_rgb8(),
-                    Err(error) => {
-                        warn!(%error, x = tile.x, y = tile.y, "tile JPEG decode failed");
-                        continue;
-                    }
-                };
-            if decoded.width() as usize != tile_w || decoded.height() as usize != tile_h {
-                warn!(
-                    decoded = format!("{}x{}", decoded.width(), decoded.height()),
-                    x = tile.x,
-                    y = tile.y,
-                    expected = format!("{tile_w}x{tile_h}"),
-                    "tile dimensions mismatch"
-                );
-                continue;
-            }
             let rgb = decoded.as_raw();
             for row in 0..tile_h {
                 let dst_y = y + row;
@@ -666,6 +709,20 @@ impl App {
             "远联 | {} | {}x{} | {} | {} | TLS 已固定",
             self.host_name, self.remote_w, self.remote_h, status, input
         ));
+        if self.stats_log_at.elapsed() >= Duration::from_secs(5) {
+            let presented_elapsed = self.presented_at.elapsed().as_secs_f64().max(0.001);
+            info!(
+                presented_fps = format!("{:.1}", self.presented_frames as f64 / presented_elapsed),
+                applied_fps = format!("{fps:.1}"),
+                mib_per_second = format!("{mib_per_second:.2}"),
+                applied_frames = self.stats.frames,
+                presented_frames = self.presented_frames,
+                "viewer presentation stats"
+            );
+            self.stats_log_at = Instant::now();
+            self.presented_at = Instant::now();
+            self.presented_frames = 0;
+        }
         self.stats.frames = 0;
         self.stats.bytes = 0;
         self.stats.since = Some(Instant::now());
@@ -674,8 +731,8 @@ impl App {
 }
 
 fn fit_window(remote_w: u32, remote_h: u32) -> (usize, usize) {
-    let max_w = 1600.0;
-    let max_h = 900.0;
+    let max_w = 960.0;
+    let max_h = 600.0;
     let scale = (max_w / remote_w as f64)
         .min(max_h / remote_h as f64)
         .clamp(0.25, 1.0);

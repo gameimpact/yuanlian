@@ -2,7 +2,7 @@
 # Bootstrap for the Linux control server; release binaries are built elsewhere.
 set -euo pipefail
 
-VERSION=0.2.0
+VERSION=0.3.0
 CHECK_ONLY=false
 case "${1:-}" in
   '') ;;

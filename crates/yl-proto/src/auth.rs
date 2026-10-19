@@ -24,7 +24,7 @@ use crate::PERMISSION_ALL;
 
 pub const TICKET_PREFIX: &str = "yl1";
 pub const TICKET_PURPOSE: &str = "remote_session";
-pub const TICKET_VERSION: u8 = 1;
+pub const TICKET_VERSION: u8 = 2;
 pub const TICKET_CLOCK_SKEW_SECS: i64 = 90;
 pub const TICKET_MAX_BYTES: usize = 8192;
 
@@ -37,6 +37,7 @@ pub struct SessionClaims {
     pub user: String,
     pub jti: String,
     pub purpose: String,
+    pub mode: String,
     pub nonce_sha256: String,
     pub permissions: u32,
     pub iat: i64,
@@ -179,6 +180,9 @@ pub fn verify_session_ticket(
     if claims.nonce_sha256 != nonce_sha256(expected_nonce) {
         return Err(TicketError::NonceMismatch);
     }
+    if !matches!(claims.mode.as_str(), "tiles" | "flow" | "quality") {
+        return Err(TicketError::WrongPurpose);
+    }
     if claims.permissions == 0 || claims.permissions & !PERMISSION_ALL != 0 {
         return Err(TicketError::InvalidPermissions);
     }
@@ -211,6 +215,7 @@ mod tests {
             user: "alice".into(),
             jti: "jti-1".into(),
             purpose: TICKET_PURPOSE.into(),
+            mode: "tiles".into(),
             nonce_sha256: nonce_sha256(nonce),
             permissions: PERMISSION_VIEW | PERMISSION_CONTROL,
             iat: now,

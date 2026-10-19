@@ -15,6 +15,8 @@
 
 **M0（Windows 引擎垂直切片）已完成并实机验证（2026-10-18）**：真实采集、图块差分/精修、TLS 指纹固定、SendInput、原生查看器。证据见 `docs/evidence/m0-results.md`。
 
+**质量档 Moonlight 社区预览（2026-10-19）**：按用户授权直接使用上游 Moonlight-qt 6.2.0 + Sunshine 2026.914.233613（GPL-3.0，固定版本/哈希），作为 Windows 外部进程质量预览；本机回环 1080p60 HEVC 实测约 60 fps，约 5 分钟稳定。它**不经过**远联账号/票据/Host 授权/撤权，未嵌入 Flutter，未做两物理机/跨 NAT/1440p/4K/10 分钟验收；仅社区、非商用，不是正式质量模式。证据见 `docs/evidence/quality-preview-moonlight-2026-10-19.md`。
+
 **阶段 B（账号/设备/配对/短时票据/Host 授权闭环）已完成代码与自动化/本机 E2E（2026-10-18，0.2.0，协议 v2）**：持久设备身份、Ed25519 票据、Host 离线验签/防重放/本机确认、读写权限交集、中心撤权（实测 0.86–1.17 秒）、Flutter 账号/设备/配对 UI。证据见 `docs/evidence/b-auth-ticket-2026-10-18.md`。M1 的 Rust FFI/native texture、Linux/Android Host 与三模式仍未完成；M0/B 都不是完整产品，不要扩大宣称。
 
 ## 平台 UI 约定（M3）
@@ -60,6 +62,9 @@ dart analyze lib test
 flutter test --no-pub
 FLUTTER_CMAKE_PATH=... flutter build windows --release --no-pub
 
+# 质量预览（社区/非商用；需先按 third_party/moonlight/README.md 放好两个官方 zip）
+powershell -ExecutionPolicy Bypass -File packaging/quality/build-quality-preview.ps1 -Version 0.2.0
+
 # 独立服务端（WSL Ubuntu；不能以根 workspace 测试代替）
 cd server
 cargo fmt -- --check
@@ -84,12 +89,12 @@ cargo build --release --locked
 - Windows Host + Windows/Android 主控；单显示器、单会话；Host 顺序处理连接。
 - Host TLS 身份持久化；无票据连接默认拒绝，只有显式 `--allow-anonymous` 才进入匿名开发模式。自签名指纹仍需首次人工核对。
 - 画面走 TCP，存在队头阻塞；输入/画面/文件共用连接。
-- 采集后端为 XCap（Windows GDI）；3200×2000 本轮约 7–9 fps、采集约 51–55 ms/帧、编码约 24–33 ms/帧；不是完整会话性能验收。
-- 图块精修是 JPEG 85→95，不是无损；无滚动复用、块版本/TTL、无损文字。
+- 采集后端主路径为 WGC（`windows-capture` 2.0.1），GDI/XCap 回退；Host `--fps` 默认 30，可请求 60。3200×2000 全屏动态：30 档 Host 管线约 33 fps，60 档约 54.7 fps；回环端到端 30 档约 33 fps，60 档 presented 37–45 fps，未达 60 门槛。不得把 Host 管线或单机 loopback 当作两台物理设备验收；证据见 `docs/evidence/balanced-fps-2026-10-19.md`。
+- 图块精修是 JPEG 85→95，不是无损；无滚动复用、块版本/TTL、无损文字。图块哈希/编码已 rayon 并行，查看器 JPEG 解码已并行。
 - Host 与查看器均为 Per-Monitor-V2；混合 DPI 未实测。
 - 键盘映射为虚拟键码；Unicode/中文通过 `TextInput` 注入，不是远端 IME；同机键盘 E2E 会回环。
 - 票据默认 1 小时；Host 心跳每 1 秒，控制面断联 30 秒后租约失效并结束票据会话。服务端票据私钥在 SQLite，未做 HSM/加密存储。
 - 本机授权是 MessageBox；无托盘/服务安装/无人值守；Session 0 服务不能显示桌面对话框，必须拒绝而非绕过。
-- 质量模式（Moonlight/Sunshine）、完整兼顾/流畅参数、中继、E2EE、Linux 客户端/Host、Android Host、完整文件专项均未实现。
+- 质量模式目前只有外部 Moonlight/Sunshine 社区非商用预览，未接入远联票据/撤权、未嵌入 Flutter、未两机验收；完整兼顾/流畅参数、中继、E2EE、Linux 客户端/Host、Android Host、完整文件专项均未实现。
 - 文件传输：Host 用 `--file-root` 显式授权单目录；Flutter 支持单文件双向校验、无覆盖原子提交、下载取消、读/写权限；无目录/拖放/续传/SAF/ACL/删除；故障注入仅覆盖单元测试场景。
 - Android：release APK 为独立预览签名；捏合/IME/SAF/实体触控未验收；无 Android Host。Windows Mica 仅请求真实 DWM，Flutter 不透明表面下不能宣称整窗材质。

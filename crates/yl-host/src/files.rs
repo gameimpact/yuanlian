@@ -31,6 +31,7 @@ pub struct FileServer {
     root_label: String,
     uploads: HashMap<u64, UploadState>,
     downloads: HashMap<u64, Arc<AtomicBool>>,
+    download_chunk_size: usize,
 }
 
 struct UploadState {
@@ -67,6 +68,7 @@ pub struct DownloadReader {
     offset: u64,
     size: u64,
     cancel: Arc<AtomicBool>,
+    chunk_size: usize,
 }
 
 impl FileServer {
@@ -87,7 +89,12 @@ impl FileServer {
             root_label,
             uploads: HashMap::new(),
             downloads: HashMap::new(),
+            download_chunk_size: CHUNK_SIZE,
         })
+    }
+
+    pub fn set_flow_budget(&mut self) {
+        self.download_chunk_size = 2048;
     }
 
     pub fn capabilities(&self) -> (bool, String) {
@@ -274,6 +281,7 @@ impl FileServer {
             offset: 0,
             size: metadata.len(),
             cancel,
+            chunk_size: self.download_chunk_size,
         })
     }
 
@@ -336,7 +344,7 @@ impl FileServer {
 
 impl DownloadReader {
     pub fn stream(mut self, tx: mpsc::Sender<ServerMessage>) -> Result<()> {
-        let mut buffer = vec![0u8; CHUNK_SIZE];
+        let mut buffer = vec![0u8; self.chunk_size];
         loop {
             if self.cancel.load(Ordering::Relaxed) {
                 let _ = tx.blocking_send(ServerMessage::FileError {

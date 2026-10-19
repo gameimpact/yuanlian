@@ -1,6 +1,6 @@
 # 远联 0.2.0 发布说明（开发预览）
 
-日期：2026-10-18。协议 v2。源码 revision 记录在 `build-manifest.json`；构建时工作区有未提交改动，本版本不是“干净源码构建”的最终发布候选。
+日期：2026-10-18（原始）；2026-10-19 增加质量预览与性能增量。协议 v2。源码 revision 记录在 `build-manifest.json`；构建时工作区有未提交改动，本版本不是“干净源码构建”的最终发布候选。
 
 ## 新增
 
@@ -31,9 +31,22 @@
 - 会话状态区分 active/unknown/stale/revoking/ended，显示 Host 实例、票据/最终权限、请求/实际输入和真实路径；撤权先显示“请求已接受”，Host 上报结束才显示“已确认”。
 - 修复 R1–R6：待用票据随用户/设备/分享撤权；跨设备 session 绑定；租约与清理；撤销设备后允许受限结束确认；Host 开始确认失败即关闭；登录 Argon2 移出数据库锁。
 
+### 质量档社区预览（2026-10-19 增量）
+
+- 按用户授权加入上游 Moonlight-qt 6.2.0 + Sunshine 2026.914.233613（GPL-3.0，固定哈希）作为 Windows 外部进程质量预览；远联客户端新增质量预览页、组件检测、参数校验和 detached 启动。
+- 本机回环 1920x1080 60 fps HEVC、20 Mbps，约 5 分钟官方浮层 60.05 fps，Host 处理延迟 1.7/4.6/2.0 ms，丢帧约 0.002%。
+- 该路径不经过远联账号/票据/Host 授权/撤权，未嵌入 Flutter，未做两物理机/跨 NAT/1440p/4K/10 分钟验收；**仅社区、非商用**，不是正式质量模式。
+- 主安装器不包含 GPL 二进制；单独包、许可证全文、NOTICE 与源码 offer 位于 `quality-preview/`。
+
+### 性能（2026-10-19 增量）
+
+- Windows 采集主路径改为 Windows Graphics Capture（`windows-capture` 2.0.1），保留持久 GDI/XCap 回退；图块哈希/JPEG 编码和原生查看器解码改为 rayon 并行。
+- Host `--fps` 默认 30，可请求 60。3200×2000 全屏动态 600 帧：30 档 Host 管线平均 33.1 fps（18/18 个 1 秒窗口 ≥30）；60 档平均 54.7 fps（7/10 窗口 ≥55，未达标）。
+- 回环端到端：30 档查看器实际呈现约 33 fps；60 档约 37–45 fps，未达到 60 档门槛。没有两台物理设备/10 分钟/1080p 独立源，不能宣称完整 30–60 验收。
+
 ## 验证摘要
 
-- Rust 28 项、Flutter 40 项、服务端 6 项测试通过；fmt/clippy/analyze 通过。
+- Rust 28 项、Flutter 48 项、服务端 6 项测试通过；fmt/clippy/analyze 通过。
 - 票据 API 闭环、真实 Host 出画、防重放、匿名拒绝、撤权时延均在本机实测，详见 `docs/evidence/b-auth-ticket-2026-10-18.md`。
 - Windows 便携包解压启动、安装器安装/升级/卸载结果见 `build-manifest.json` 与 KNOWN-ISSUES；Android APK 签名与安装结果见清单。
 
@@ -46,4 +59,4 @@
 
 ## 未包含
 
-Android Host、质量/兼顾/流畅三模式、Sunshine/Moonlight、NAT/中继/E2EE、音频/剪贴板/手柄、MFA/恢复码、完整后台策略/备份、跨物理机/公网/2 小时/4 GiB 文件验收；Linux 实机与 Docker 未验证。
+Android Host、嵌入式/正式质量模式（当前仅外部 Moonlight 社区预览）、完整兼顾/流畅三模式、NAT/中继/E2EE、音频/剪贴板/手柄、MFA/恢复码、完整后台策略/备份、跨物理机/公网/2 小时/4 GiB 文件验收；Linux 实机与 Docker 未验证。

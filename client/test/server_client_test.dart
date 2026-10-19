@@ -57,6 +57,7 @@ void main() {
       if (request.url.path == '/api/v1/devices/yl-1/session-ticket') {
         final body = jsonDecode(request.body) as Map<String, Object?>;
         expect(body['nonce'], 'ab' * 32);
+        expect(body['mode'], 'tiles');
         return http.Response(
           jsonEncode({
             'ticket': 'yl1.payload.signature',

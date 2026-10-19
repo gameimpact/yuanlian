@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../models/profile.dart';
+import 'design_tokens.dart';
 import 'widgets.dart';
 
 class SettingsPage extends StatelessWidget {
@@ -125,12 +126,12 @@ class SettingsPage extends StatelessWidget {
                     const Expanded(
                       child: SectionTitle(
                         '账号、服务器与策略',
-                        subtitle: '当前版本未接入账号服务端，不能登录、同步设备或下发策略。',
+                        subtitle: '账号、设备目录、配对、短时票据和撤权已接入。',
                       ),
                     ),
                     StatusPill(
-                      label: '未实现',
-                      color: theme.colorScheme.onSurfaceVariant,
+                      label: '已接入',
+                      color: YlStatus.success,
                       compact: true,
                     ),
                   ],
@@ -144,8 +145,9 @@ class SettingsPage extends StatelessWidget {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    'M0 使用直连 Host + 证书指纹固定。账号、设备绑定、无人值守、会话票据与中继属于后续阶段；'
-                    '在完成前请不要把 Host 暴露到公网，也不要用开发版承担生产远控。',
+                    '直连数据面使用 TLS 与 Host 证书指纹固定；登录后可签发绑定设备、用户和权限的'
+                    '短时票据，Host 仍会本机确认并校验撤权。中继、无人值守、MFA 与策略下发仍未实现；'
+                    '不要把开发版 Host 暴露到公网或用于生产远控。',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant,
                     ),
@@ -161,15 +163,25 @@ class SettingsPage extends StatelessWidget {
               children: [
                 const SectionTitle('关于', subtitle: '远联 YuanLian · 跨平台远程控制'),
                 const SizedBox(height: 10),
-                const InfoRow(label: '客户端', value: '0.1.0 (M1 开发版)'),
-                const InfoRow(label: '协议', value: 'yuanlian/1'),
-                const InfoRow(label: 'Host 引擎', value: 'M0 · XCap/GDI + 图块 JPEG'),
+                const InfoRow(label: '客户端', value: '0.3.0 (阶段 B + 性能构建)'),
+                const InfoRow(label: '协议', value: '协议 v3 · ALPN yuanlian/1'),
+                const InfoRow(
+                  label: 'Host 引擎',
+                  value: 'WGC 主路径 + 图块 JPEG（GDI/XCap 回退）',
+                ),
+                const InfoRow(
+                  label: '质量预览',
+                  value: '视频串流 · Moonlight 6.2.0 + Sunshine（社区/非商用）',
+                ),
                 const InfoRow(label: '许可证', value: 'AGPL-3.0-or-later'),
-                const InfoRow(label: '画面路径', value: 'Flutter JPEG 图块合成（临时实现）'),
+                const InfoRow(
+                  label: '画面路径',
+                  value: 'Flutter JPEG 图块合成（native texture 未实现）',
+                ),
                 const SizedBox(height: 8),
                 Text(
-                  '后续会用 Rust 核心 + native texture 替代逐帧 JPEG/Dart 合成，并补齐账号、文件、'
-                  'Linux/Android 与质量模式。当前画面通道不冒充 Moonlight。',
+                  '直连画面仍为 JPEG 图块，后续会替换为 Rust 核心 + native texture。质量档由独立的'
+                  'Moonlight 显示；账号设备入口接入 Host 票据与撤权，独立社区预览仍不受该闭环保护。',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
@@ -183,7 +195,8 @@ class SettingsPage extends StatelessWidget {
   }
 
   String _dataDirectory() {
-    final base = Platform.environment['APPDATA'] ??
+    final base =
+        Platform.environment['APPDATA'] ??
         Platform.environment['XDG_CONFIG_HOME'] ??
         Directory.systemTemp.path;
     return '$base${Platform.pathSeparator}YuanLian';

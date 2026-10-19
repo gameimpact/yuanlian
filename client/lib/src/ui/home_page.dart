@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/profile.dart';
+import 'quality_preview_page.dart';
 import 'widgets.dart';
 
 class HomePage extends StatefulWidget {
@@ -16,6 +17,7 @@ class HomePage extends StatefulWidget {
     required this.addressFocusNode,
     this.showHeader = true,
     this.compact = false,
+    this.onOpenAccount,
   });
 
   final List<ConnectionProfile> profiles;
@@ -24,6 +26,7 @@ class HomePage extends StatefulWidget {
   final FocusNode addressFocusNode;
   final bool showHeader;
   final bool compact;
+  final VoidCallback? onOpenAccount;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -35,6 +38,7 @@ class _HomePageState extends State<HomePage> {
   final _addressController = TextEditingController();
   final _fingerprintController = TextEditingController();
   bool _canConnect = false;
+  String _mode = 'tiles';
 
   @override
   void initState() {
@@ -45,10 +49,9 @@ class _HomePageState extends State<HomePage> {
       _addressController.text = recent.address;
       _fingerprintController.text = recent.fingerprint;
     } else {
-      _addressController.text =
-          defaultTargetPlatform == TargetPlatform.android
-              ? ''
-              : '127.0.0.1:24800';
+      _addressController.text = defaultTargetPlatform == TargetPlatform.android
+          ? ''
+          : '127.0.0.1:24800';
     }
     _addressController.addListener(_onFieldChanged);
     _fingerprintController.addListener(_onFieldChanged);
@@ -64,9 +67,7 @@ class _HomePageState extends State<HomePage> {
 
   bool _isValid() {
     return ConnectionProfile.validateAddress(_addressController.text) == null &&
-        ConnectionProfile.validateFingerprint(
-              _fingerprintController.text,
-            ) ==
+        ConnectionProfile.validateFingerprint(_fingerprintController.text) ==
             null;
   }
 
@@ -77,7 +78,8 @@ class _HomePageState extends State<HomePage> {
     final port = colon < 0 || colon == text.length - 1
         ? '24800'
         : text.substring(colon + 1);
-    final local = host.isEmpty ||
+    final local =
+        host.isEmpty ||
         host == '127.0.0.1' ||
         host.toLowerCase() == 'localhost';
     final bindHost = local ? '127.0.0.1' : '0.0.0.0';
@@ -114,6 +116,7 @@ class _HomePageState extends State<HomePage> {
     }
     final address = _addressController.text.trim();
     final profile = ConnectionProfile(
+      mode: _mode,
       name: _nameController.text.trim().isEmpty
           ? 'Host $address'
           : _nameController.text.trim(),
@@ -144,8 +147,7 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final wide =
-        !widget.compact && MediaQuery.sizeOf(context).width >= 1100;
+    final wide = !widget.compact && MediaQuery.sizeOf(context).width >= 1100;
     final connect = _buildConnectPanel(theme);
     final device = _buildThisDevicePanel(theme);
     final content = <Widget>[
@@ -190,14 +192,12 @@ class _HomePageState extends State<HomePage> {
       _buildModes(theme),
       SizedBox(height: widget.compact ? 16 : 20),
       _buildRecent(theme),
-      if (!wide) ...[
-        SizedBox(height: widget.compact ? 16 : 20),
-        device,
-      ],
+      if (!wide) ...[SizedBox(height: widget.compact ? 16 : 20), device],
       const SizedBox(height: 12),
       Text(
-        '当前版本只实现画面、输入与基础单文件传输。账号、设备目录、音频、剪贴板、'
-        '质量模式、Linux 与 Android 被控 Host 尚未实现，不能对外宣称完成。',
+        '当前版本实现画面、输入、账号/票据/撤权与基础单文件传输。质量串流可从账号设备页接入 Host 授权；'
+        '独立社区预览仍不受票据/撤权保护。音频专项、剪贴板、Linux 与 Android 被控 '
+        'Host 仍未实现，不能对外宣称完整产品。',
         style: theme.textTheme.bodySmall?.copyWith(
           color: theme.colorScheme.onSurfaceVariant,
         ),
@@ -276,6 +276,22 @@ class _HomePageState extends State<HomePage> {
                   ConnectionProfile.validateAddress(value ?? ''),
               textInputAction: TextInputAction.next,
             ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _mode,
+              decoration: const InputDecoration(labelText: '连接模式'),
+              isExpanded: true,
+              items: const [
+                DropdownMenuItem(value: 'tiles', child: Text('兼顾质量和流畅 · 图块')),
+                DropdownMenuItem(value: 'flow', child: Text('流畅 · 低带宽渐进图块')),
+              ],
+              onChanged: (value) => setState(() => _mode = value ?? 'tiles'),
+            ),
+            if (_mode == 'flow')
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text('约 1 Mbps 会话预算；逐块渐进刷新，优先控制；文件限速。实际网络重传可能增加流量。'),
+              ),
             if (widget.compact && kDebugMode)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
@@ -381,7 +397,7 @@ class _HomePageState extends State<HomePage> {
                   children: [
                     Text(hostname, style: theme.textTheme.titleMedium),
                     Text(
-                      '主控端 · Flutter 0.1.0',
+                      '主控端 · Flutter 0.3.0',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
@@ -394,8 +410,8 @@ class _HomePageState extends State<HomePage> {
           const SizedBox(height: 12),
           const Divider(),
           InfoRow(label: '系统', value: _systemLabel()),
-          const InfoRow(label: '角色', value: '主控查看器（M0 引擎）'),
-          const InfoRow(label: '协议', value: 'yuanlian/1 · TLS 证书指纹固定'),
+          const InfoRow(label: '角色', value: '主控查看器（Flutter + JPEG 图块）'),
+          const InfoRow(label: '协议', value: '协议 v3 · ALPN yuanlian/1'),
           const SizedBox(height: 8),
           Container(
             padding: const EdgeInsets.all(12),
@@ -419,11 +435,8 @@ class _HomePageState extends State<HomePage> {
                     IconButton(
                       tooltip: '复制 Host 启动命令',
                       visualDensity: VisualDensity.compact,
-                      onPressed: () => copyText(
-                        context,
-                        command,
-                        label: '已复制 Host 启动命令',
-                      ),
+                      onPressed: () =>
+                          copyText(context, command, label: '已复制 Host 启动命令'),
                       icon: const Icon(Icons.copy_rounded, size: 16),
                     ),
                   ],
@@ -431,7 +444,10 @@ class _HomePageState extends State<HomePage> {
                 const SizedBox(height: 6),
                 SelectableText(
                   command,
-                  style: const TextStyle(fontFamily: 'Consolas', fontSize: 11.5),
+                  style: const TextStyle(
+                    fontFamily: 'Consolas',
+                    fontSize: 11.5,
+                  ),
                 ),
                 const SizedBox(height: 6),
                 Text(
@@ -485,7 +501,7 @@ class _HomePageState extends State<HomePage> {
           ),
           title: Text('模式与开发计划', style: theme.textTheme.titleMedium),
           subtitle: Text(
-            '当前连接使用兼顾模式的图块引擎',
+            '兼顾使用图块；质量使用 Moonlight 视频串流（预览）',
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -499,18 +515,37 @@ class _HomePageState extends State<HomePage> {
               enabled: true,
             ),
             const Divider(),
-            const _ModeRow(
-              title: '质量模式',
-              detail: '需要 Sunshine + moonlight-common-c；当前未安装，不会静默切换。',
-              status: '未实现',
-              enabled: false,
+            _ModeRow(
+              title: '质量模式（视频串流 · Host 票据授权）',
+              detail: '从账号与设备页选择质量：Host 验票、本机确认、专用 Sunshine 和中心撤权；画面在外部 Moonlight 窗口。',
+              status: Platform.isWindows ? '需 v3 Host' : '仅 Windows',
+              enabled: Platform.isWindows,
+              actionLabel: '账号与设备',
+              onAction: Platform.isWindows ? widget.onOpenAccount : null,
+            ),
+            const Divider(),
+            _ModeRow(
+              title: '质量模式（视频串流 · Moonlight 社区预览）',
+              detail:
+                  '质量模式使用视频串流，由 Moonlight + Sunshine 协商编解码；'
+                  '作为外部程序运行，不经过远联票据、Host 授权与中心撤权。',
+              status: Platform.isWindows ? '社区预览' : '仅 Windows 预览',
+              enabled: Platform.isWindows,
+              actionLabel: '打开预览',
+              onAction: !Platform.isWindows
+                  ? null
+                  : () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const QualityPreviewPage(),
+                      ),
+                    ),
             ),
             const Divider(),
             const _ModeRow(
               title: '流畅模式',
-              detail: '需要总会话带宽预算、拥塞控制与通道分账；图块引擎不能冒充。',
-              status: '未实现',
-              enabled: false,
+              detail: '在连接表单选择流畅：低带宽渐进图块、控制优先、共享预算与文件限速。',
+              status: '需 v3 Host',
+              enabled: true,
             ),
           ],
         ),
@@ -603,10 +638,7 @@ class _RecentTile extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          TextButton(
-            onPressed: onConnect,
-            child: const Text('连接'),
-          ),
+          TextButton(onPressed: onConnect, child: const Text('连接')),
           IconButton(
             tooltip: '移除保存的连接',
             onPressed: () async {
@@ -614,9 +646,7 @@ class _RecentTile extends StatelessWidget {
                 context: context,
                 builder: (context) => AlertDialog(
                   title: const Text('移除连接'),
-                  content: Text(
-                    '从地址簿移除“${profile.name}”？不会影响 Host 端或当前会话。',
-                  ),
+                  content: Text('从地址簿移除“${profile.name}”？不会影响 Host 端或当前会话。'),
                   actions: [
                     TextButton(
                       onPressed: () => Navigator.of(context).pop(false),
@@ -647,12 +677,16 @@ class _ModeRow extends StatelessWidget {
     required this.detail,
     required this.status,
     required this.enabled,
+    this.actionLabel,
+    this.onAction,
   });
 
   final String title;
   final String detail;
   final String status;
   final bool enabled;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -663,7 +697,9 @@ class _ModeRow extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Icon(
-            enabled ? Icons.check_circle_outline_rounded : Icons.lock_outline_rounded,
+            enabled
+                ? Icons.check_circle_outline_rounded
+                : Icons.lock_outline_rounded,
             size: 17,
             color: enabled
                 ? theme.colorScheme.primary
@@ -686,11 +722,16 @@ class _ModeRow extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          StatusPill(
-            label: status,
-            color: enabled ? const Color(0xFF16A34A) : const Color(0xFF8A93A3),
-            compact: true,
-          ),
+          if (onAction != null && actionLabel != null)
+            OutlinedButton(onPressed: onAction, child: Text(actionLabel!))
+          else
+            StatusPill(
+              label: status,
+              color: enabled
+                  ? const Color(0xFF16A34A)
+                  : const Color(0xFF8A93A3),
+              compact: true,
+            ),
         ],
       ),
     );

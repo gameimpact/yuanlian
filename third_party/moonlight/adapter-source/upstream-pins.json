@@ -1,0 +1,94 @@
+[
+  {
+    "component": "sunshine",
+    "repository": "https://github.com/LizardByte/Sunshine",
+    "commit": "63d35f702ee9e362e43263742981836ec0710384",
+    "submodules": [
+      {
+        "path": "packaging/linux/flatpak/deps/flatpak-builder-tools",
+        "sha": "de2225a6dee4818c1339b3cdbf29f90c471fcb7e"
+      },
+      {
+        "path": "third-party/Simple-Web-Server",
+        "sha": "546895a93a29062bb178367b46c7afb72da9881e"
+      },
+      {
+        "path": "third-party/TPCircularBuffer",
+        "sha": "cc520397504bb72bc6df79ff03eb72988a6dc50d"
+      },
+      {
+        "path": "third-party/ViGEmClient",
+        "sha": "8d71f6740ffff4671cdadbca255ce528e3cd3fef"
+      },
+      {
+        "path": "third-party/build-deps",
+        "sha": "a1fe2841cbc0d8c4501a1006d2d1cb88f219cc8c"
+      },
+      {
+        "path": "third-party/doxyconfig",
+        "sha": "419127bad87f49b2d45fa957ea7302abbb49c01f"
+      },
+      {
+        "path": "third-party/glad",
+        "sha": "73db193f853e2ee079bf3ca8a64aa2eaf6459043"
+      },
+      {
+        "path": "third-party/libdisplaydevice",
+        "sha": "6e9722f89103320c948dc1199066c9e17a69e88a"
+      },
+      {
+        "path": "third-party/libvirtualhid",
+        "sha": "53e1a949fc0784af716b782ddfa6c647cafd1f05"
+      },
+      {
+        "path": "third-party/lizardbyte-common",
+        "sha": "f9d91e1d29b7473f58e43acde4579da4e56c4abe"
+      },
+      {
+        "path": "third-party/moonlight-common-c",
+        "sha": "62e066388f1a1b133e0bee947b9a374311a3354b"
+      },
+      {
+        "path": "third-party/nvapi",
+        "sha": "cd6918f60b3c9a0476fdfe7e89bb32330602049d"
+      },
+      {
+        "path": "third-party/plasma-wayland-protocols",
+        "sha": "382dfabda886d3f2f5c067b22e5a22376685ba78"
+      },
+      {
+        "path": "third-party/tray",
+        "sha": "c329d9fd0d39dfb47f0f2fb5467e1db2e8a1d623"
+      },
+      {
+        "path": "third-party/wayland-protocols",
+        "sha": "ee78491a237eaff9389a0ccf8680521d074407d3"
+      },
+      {
+        "path": "third-party/wlr-protocols",
+        "sha": "bf4fc79abc359eea5a0edec0ac6d4a2b2955f82a"
+      }
+    ],
+    "gitmodules": "[submodule \"packaging/linux/flatpak/deps/flatpak-builder-tools\"]\n\tpath = packaging/linux/flatpak/deps/flatpak-builder-tools\n\turl = https://github.com/flatpak/flatpak-builder-tools.git\n\tbranch = master\n[submodule \"third-party/build-deps\"]\n\tpath = third-party/build-deps\n\turl = https://github.com/LizardByte/build-deps.git\n\tbranch = master\n[submodule \"third-party/doxyconfig\"]\n\tpath = third-party/doxyconfig\n\turl = https://github.com/LizardByte/doxyconfig.git\n\tbranch = master\n[submodule \"third-party/glad\"]\n\tpath = third-party/glad\n\turl = https://github.com/Dav1dde/glad.git\n[submodule \"third-party/libdisplaydevice\"]\n\tpath = third-party/libdisplaydevice\n\turl = https://github.com/LizardByte/libdisplaydevice.git\n\tbranch = master\n[submodule \"third-party/libvirtualhid\"]\n\tpath = third-party/libvirtualhid\n\turl = https://github.com/LizardByte/libvirtualhid.git\n\tbranch = master\n[submodule \"third-party/lizardbyte-common\"]\n\tpath = third-party/lizardbyte-common\n\turl = https://github.com/LizardByte/lizardbyte-common.git\n\tbranch = master\n[submodule \"third-party/moonlight-common-c\"]\n\tpath = third-party/moonlight-common-c\n\turl = https://github.com/moonlight-stream/moonlight-common-c.git\n\tbranch = master\n[submodule \"third-party/nvapi\"]\n\tpath = third-party/nvapi\n\turl = https://github.com/NVIDIA/nvapi.git\n\tbranch = main\n[submodule \"third-party/plasma-wayland-protocols\"]\n\tpath = third-party/plasma-wayland-protocols\n\turl = https://github.com/KDE/plasma-wayland-protocols.git\n\tbranch = master\n[submodule \"third-party/Simple-Web-Server\"]\n\tpath = third-party/Simple-Web-Server\n\turl = https://github.com/LizardByte-infrastructure/Simple-Web-Server.git\n\tbranch = master\n[submodule \"third-party/TPCircularBuffer\"]\n\tpath = third-party/TPCircularBuffer\n\turl = https://github.com/michaeltyson/TPCircularBuffer.git\n\tbranch = master\n[submodule \"third-party/tray\"]\n\tpath = third-party/tray\n\turl = https://github.com/LizardByte/tray.git\n\tbranch = master\n[submodule \"third-party/ViGEmClient\"]\n\tpath = third-party/ViGEmClient\n\turl = https://github.com/LizardByte/Virtual-Gamepad-Emulation-Client.git\n\tbranch = master\n[submodule \"third-party/wayland-protocols\"]\n\tpath = third-party/wayland-protocols\n\turl = https://github.com/LizardByte-infrastructure/wayland-protocols.git\n\tbranch = main\n[submodule \"third-party/wlr-protocols\"]\n\tpath = third-party/wlr-protocols\n\turl = https://github.com/LizardByte-infrastructure/wlr-protocols.git\n\tbranch = master\n"
+  },
+  {
+    "component": "moonlight",
+    "repository": "https://github.com/moonlight-stream/moonlight-qt",
+    "commit": "de2467e433821664cdd2224aad8c89a625be1ad9",
+    "submodules": [
+      {
+        "path": "app/SDL_GameControllerDB",
+        "sha": "8d9fefd7b810f2541f78cc7a8ccbd185bc84c7a5"
+      },
+      {
+        "path": "moonlight-common-c/moonlight-common-c",
+        "sha": "f900dd4767759c7b9d0e93bcea666b55c69ea62f"
+      },
+      {
+        "path": "qmdnsengine/qmdnsengine",
+        "sha": "920c097ffa742e2968290f15d4dde6693aec02e5"
+      }
+    ],
+    "gitmodules": "[submodule \"moonlight-common-c/moonlight-common-c\"]\n\tpath = moonlight-common-c/moonlight-common-c\n\turl = https://github.com/moonlight-stream/moonlight-common-c.git\n[submodule \"qmdnsengine/qmdnsengine\"]\n\tpath = qmdnsengine/qmdnsengine\n\turl = https://github.com/cgutman/qmdnsengine.git\n[submodule \"app/SDL_GameControllerDB\"]\n\tpath = app/SDL_GameControllerDB\n\turl = https://github.com/gabomdq/SDL_GameControllerDB.git\n"
+  }
+]

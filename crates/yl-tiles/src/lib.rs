@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Result};
 use blake3::Hasher;
 use image::{codecs::jpeg::JpegEncoder, ExtendedColorType, RgbaImage};
+use rayon::prelude::*;
 
 pub const DEFAULT_TILE_SIZE: u32 = 128;
 pub const DEFAULT_QUALITY: u8 = 85;
@@ -142,39 +143,68 @@ impl TileDiffer {
         }
         let force_full = force_full || geometry_changed;
         let now = Instant::now();
-        let mut tiles = Vec::new();
+        let tile_size = self.settings.tile_size;
+        let quality = self.settings.quality;
+        let refine_quality = self.settings.refine_quality;
+        let refine_delay = self.settings.refine_delay;
 
-        for y in (0..height).step_by(self.settings.tile_size as usize) {
-            for x in (0..width).step_by(self.settings.tile_size as usize) {
-                let rect = TileRect::new(
+        // Hash every tile in parallel; hashing is independent and often the
+        // first CPU bottleneck at 1080p/60. The grid order is preserved so the
+        // resulting frame remains deterministic.
+        let mut rects = Vec::new();
+        for y in (0..height).step_by(tile_size as usize) {
+            for x in (0..width).step_by(tile_size as usize) {
+                rects.push(TileRect::new(
                     x,
                     y,
-                    self.settings.tile_size.min(width - x),
-                    self.settings.tile_size.min(height - y),
-                );
-                let index = self.index_of(rect.x, rect.y);
-                let hash = hash_tile(image, rect);
-                let changed = force_full || self.hashes[index] != Some(hash);
-
-                if changed {
-                    tiles.push(EncodedTile {
-                        rect,
-                        jpeg: encode_tile(image, rect, self.settings.quality)?,
-                    });
-                    self.hashes[index] = Some(hash);
-                    self.last_change[index] = now;
-                    self.refined[index] = false;
-                } else if !self.refined[index]
-                    && now.duration_since(self.last_change[index]) >= self.settings.refine_delay
-                {
-                    tiles.push(EncodedTile {
-                        rect,
-                        jpeg: encode_tile(image, rect, self.settings.refine_quality)?,
-                    });
-                    self.refined[index] = true;
-                }
+                    tile_size.min(width - x),
+                    tile_size.min(height - y),
+                ));
             }
         }
+        let hashes = rects
+            .par_iter()
+            .map(|rect| hash_tile(image, *rect))
+            .collect::<Vec<_>>();
+
+        struct EncodeJob {
+            rect: TileRect,
+            quality: u8,
+        }
+        let mut jobs: Vec<EncodeJob> = Vec::new();
+        for (rect, hash) in rects.into_iter().zip(hashes) {
+            let index = self.index_of(rect.x, rect.y);
+            let changed = force_full || self.hashes[index] != Some(hash);
+            if changed {
+                jobs.push(EncodeJob { rect, quality });
+                self.hashes[index] = Some(hash);
+                self.last_change[index] = now;
+                self.refined[index] = false;
+            } else if !self.refined[index]
+                && now.duration_since(self.last_change[index]) >= refine_delay
+            {
+                jobs.push(EncodeJob {
+                    rect,
+                    quality: refine_quality,
+                });
+                self.refined[index] = true;
+            }
+        }
+
+        // JPEG encoding is independent per tile; parallelize it while keeping
+        // the job order for a stable frame layout.
+        let encoded = jobs
+            .par_iter()
+            .map(|job| encode_tile(image, job.rect, job.quality))
+            .collect::<Result<Vec<_>>>()?;
+        let tiles = jobs
+            .into_iter()
+            .zip(encoded)
+            .map(|(job, jpeg)| EncodedTile {
+                rect: job.rect,
+                jpeg,
+            })
+            .collect::<Vec<_>>();
 
         if tiles.is_empty() {
             return Ok(None);

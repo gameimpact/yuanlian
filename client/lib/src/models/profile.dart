@@ -7,20 +7,24 @@ class ConnectionProfile {
     required this.address,
     required this.fingerprint,
     this.lastConnected,
+    this.mode = 'tiles',
   });
 
   final String name;
   final String address;
   final String fingerprint;
   final DateTime? lastConnected;
+  final String mode;
 
   ConnectionProfile copyWith({
     String? name,
     String? address,
     String? fingerprint,
     DateTime? lastConnected,
+    String? mode,
   }) {
     return ConnectionProfile(
+      mode: mode ?? this.mode,
       name: name ?? this.name,
       address: address ?? this.address,
       fingerprint: fingerprint ?? this.fingerprint,
@@ -29,6 +33,7 @@ class ConnectionProfile {
   }
 
   Map<String, Object?> toJson() => <String, Object?>{
+    'mode': mode,
     'name': name,
     'address': address,
     'fingerprint': fingerprint,
@@ -43,6 +48,7 @@ class ConnectionProfile {
           : '未命名设备',
       address: json['address'] as String? ?? '',
       fingerprint: json['fingerprint'] as String? ?? '',
+      mode: json['mode'] == 'flow' ? 'flow' : 'tiles',
       lastConnected: last == null ? null : DateTime.tryParse(last),
     );
   }
@@ -92,7 +98,8 @@ class ConnectionProfile {
 /// private keys are stored here.
 class LocalStore {
   static Future<Directory> _directory() async {
-    final base = Platform.environment['APPDATA'] ??
+    final base =
+        Platform.environment['APPDATA'] ??
         Platform.environment['XDG_CONFIG_HOME'] ??
         Directory.systemTemp.path;
     final directory = Directory('$base${Platform.pathSeparator}YuanLian');
@@ -132,9 +139,8 @@ class LocalStore {
 
   static Future<void> saveProfiles(List<ConnectionProfile> profiles) async {
     final file = await _profilesFile();
-    final payload = const JsonEncoder.withIndent('  ').convert(
-      profiles.map((profile) => profile.toJson()).toList(),
-    );
+    final payload = const JsonEncoder.withIndent('  ')
+        .convert(profiles.map((profile) => profile.toJson()).toList());
     await file.writeAsString(payload, flush: true);
   }
 

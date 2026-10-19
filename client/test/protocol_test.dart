@@ -14,7 +14,8 @@ void main() {
       ..boolean(true)
       ..boolean(false)
       ..boolean(false);
-    final capMessage = decodeServerMessage(cap.toBytes()) as FileCapabilitiesReceived;
+    final capMessage =
+        decodeServerMessage(cap.toBytes()) as FileCapabilitiesReceived;
     expect(capMessage.enabled, true);
     expect(capMessage.rootLabel, 'file-root');
     expect(capMessage.read, true);
@@ -31,7 +32,8 @@ void main() {
       ..boolean(false)
       ..u64(12)
       ..u64(1700000000000);
-    final listingMessage = decodeServerMessage(listing.toBytes()) as DirListingReceived;
+    final listingMessage =
+        decodeServerMessage(listing.toBytes()) as DirListingReceived;
     expect(listingMessage.requestId, 5);
     expect(listingMessage.path, 'sub');
     expect(listingMessage.entries.single.path, 'sub/a.txt');
@@ -42,7 +44,8 @@ void main() {
       ..u64(9)
       ..u64(0)
       ..bytes(Uint8List.fromList([1, 2, 3]));
-    final chunkMessage = decodeServerMessage(chunk.toBytes()) as FileChunkReceived;
+    final chunkMessage =
+        decodeServerMessage(chunk.toBytes()) as FileChunkReceived;
     expect(chunkMessage.taskId, 9);
     expect(chunkMessage.data, [1, 2, 3]);
 
@@ -60,7 +63,8 @@ void main() {
       ..u64(5)
       ..u64(0)
       ..string('denied');
-    final errorMessage = decodeServerMessage(error.toBytes()) as FileErrorReceived;
+    final errorMessage =
+        decodeServerMessage(error.toBytes()) as FileErrorReceived;
     expect(errorMessage.message, 'denied');
   });
 
@@ -77,7 +81,9 @@ void main() {
     expect(start.u64(), 3);
     expect(start.boolean(), true);
 
-    final chunk = ByteReader(encodeUploadChunk(2, 0, Uint8List.fromList([9, 8])));
+    final chunk = ByteReader(
+      encodeUploadChunk(2, 0, Uint8List.fromList([9, 8])),
+    );
     expect(chunk.u32(), 8);
     expect(chunk.u64(), 2);
     expect(chunk.u64(), 0);
@@ -91,7 +97,7 @@ void main() {
   test('decodes Welcome exactly as the Rust Host encodes it', () {
     final writer = ByteWriter()
       ..u32(0)
-      ..u16(2)
+      ..u16(protocolVersion)
       ..string('host-1')
       ..string('测试主机')
       ..u32(3200)
@@ -108,7 +114,7 @@ void main() {
     final message = decodeServerMessage(writer.toBytes());
     expect(message, isA<WelcomeReceived>());
     final welcome = (message as WelcomeReceived).welcome;
-    expect(welcome.protocolVersion, 2);
+    expect(welcome.protocolVersion, protocolVersion);
     expect(welcome.hostName, '测试主机');
     expect(welcome.screenWidth, 3200);
     expect(welcome.screenHeight, 2000);
@@ -155,7 +161,10 @@ void main() {
     expect(message.message, 'denied');
 
     final broken = Uint8List.fromList([...writer.toBytes(), 0]);
-    expect(() => decodeServerMessage(broken), throwsA(isA<ProtocolException>()));
+    expect(
+      () => decodeServerMessage(broken),
+      throwsA(isA<ProtocolException>()),
+    );
   });
 
   test('client hello and input messages use the Rust enum layout', () {
@@ -163,7 +172,7 @@ void main() {
       encodeHello(clientName: 'viewer', clientId: 'id', requestInput: true),
     );
     expect(hello.u32(), 0);
-    expect(hello.u16(), 2);
+    expect(hello.u16(), protocolVersion);
     expect(hello.string(), 'viewer');
     expect(hello.string(), 'id');
     expect(hello.boolean(), true);
@@ -172,6 +181,8 @@ void main() {
       featureFileTransfer | featureTextInput | featureSessionTicket,
     );
     expect(hello.boolean(), false);
+    expect(hello.string(), '');
+    expect(hello.string(), 'tiles');
     expect(hello.string(), '');
     expect(hello.remaining, 0);
 
@@ -186,7 +197,7 @@ void main() {
       ),
     );
     expect(ticketed.u32(), 0);
-    expect(ticketed.u16(), 2);
+    expect(ticketed.u16(), protocolVersion);
     ticketed
       ..string()
       ..string()
@@ -195,6 +206,8 @@ void main() {
     expect(ticketed.boolean(), true);
     expect(ticketed.string(), 'yl1.payload.signature');
     expect(ticketed.string(), nonce);
+    expect(ticketed.string(), 'tiles');
+    expect(ticketed.string(), '');
     expect(ticketed.remaining, 0);
 
     final move = ByteReader(encodeMouseMove(10, 20));
@@ -237,5 +250,18 @@ void main() {
     expect(raw.first, 0xAA);
     expect(() => parseFingerprint('abc'), throwsFormatException);
   });
-}
 
+  test('quality endpoint includes effective authorization without pretending first frame', () {
+    final writer = ByteWriter()
+      ..u32(12)
+      ..u16(48189)
+      ..string('public-cert')
+      ..string('host-uuid')
+      ..u32(1)
+      ..boolean(false);
+    final ready = decodeServerMessage(writer.toBytes()) as QualityReadyReceived;
+    expect(ready.port, 48189);
+    expect(ready.permissions, permissionView);
+    expect(ready.inputAllowed, false);
+  });
+}

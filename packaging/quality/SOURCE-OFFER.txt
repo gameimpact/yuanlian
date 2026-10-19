@@ -1,0 +1,30 @@
+远联质量预览对应源码获取说明（GPL-3.0 合规）
+
+本包分发的是以下上游官方发行二进制，远联未对其打补丁或重新编译：
+
+Moonlight-qt 6.2.0
+  Release: https://github.com/moonlight-stream/moonlight-qt/releases/tag/v6.2.0
+  Source:  https://github.com/moonlight-stream/moonlight-qt/archive/de2467e433821664cdd2224aad8c89a625be1ad9.tar.gz
+  Build instructions are in the upstream source tree.
+
+Sunshine 2026.914.233613
+  Release: https://github.com/LizardByte/Sunshine/releases/tag/v2026.914.233613
+  Source:  https://github.com/LizardByte/Sunshine/archive/63d35f702ee9e362e43263742981836ec0710384.tar.gz
+  Build instructions are in the upstream source tree.
+
+如果上述地址不可用，可通过对应项目的源码仓库或 release 页面获取同一 tag/commit 的源码。
+本轮未修改上游二进制。固定对应源码及递归子模块已在本地 source-checkouts 获取，不能以只含主项目的 tar.gz 代替全部子模块。
+
+若你是通过远联仓库构建本预览包，打包脚本是：
+  packaging/quality/build-quality-preview.ps1
+
+它只做解压、版本/哈希校验和重新打包，不修改上游程序。
+
+0.3.0 Host 适配增量：
+  本项目改动源码在 crates/yl-runtime、crates/yl-host/src/quality.rs、
+  crates/yl-host/src/flow.rs、crates/yl-viewer/src/quality.rs 及 client/。
+  固定完整上游源码：third_party/moonlight/source-checkouts/
+  递归版本清单：third_party/moonlight/adapter-source/upstream-recursive-pins.json
+  获取：powershell -File packaging/quality/fetch-corresponding-source.ps1
+  深路径恢复：追加 -Resume -UseWsl（本机 Ubuntu）。
+  未复现上游全量编译；本轮不更新已发布 0.2.0 包，不把此记录等同于完整分发审计。

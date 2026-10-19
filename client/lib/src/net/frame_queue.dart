@@ -15,9 +15,7 @@ const int maxQueuedBytes = 48 * 1024 * 1024;
 const int maxQueuedPixels = maxRemotePixels;
 
 class FrameValidation {
-  const FrameValidation.error(this.error)
-      : pixels = 0,
-        bytes = 0;
+  const FrameValidation.error(this.error) : pixels = 0, bytes = 0;
 
   const FrameValidation.valid(this.pixels, this.bytes) : error = null;
 
@@ -78,7 +76,9 @@ FrameValidation validateFrame(FrameMessage frame) {
   if (pixels > frame.width * frame.height) {
     return const FrameValidation.error('图块像素总数超过画面尺寸');
   }
-  if (frame.full && pixels != frame.width * frame.height) {
+  if (frame.full &&
+      !frame.progressive &&
+      pixels != frame.width * frame.height) {
     return const FrameValidation.error('全量帧未覆盖完整画面');
   }
   return FrameValidation.valid(pixels, bytes);
@@ -139,7 +139,8 @@ class FrameQueue {
     if (frame.full) {
       _clearPending();
     }
-    final overflow = _pending.length >= maxFrames ||
+    final overflow =
+        _pending.length >= maxFrames ||
         _pendingBytes + validation.bytes > maxBytes ||
         _pendingPixels + validation.pixels > maxPixels;
     if (overflow) {

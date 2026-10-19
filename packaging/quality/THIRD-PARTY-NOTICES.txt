@@ -1,0 +1,38 @@
+远联质量预览（Moonlight 社区版）第三方声明
+YuanLian Quality Preview (Moonlight community edition) - Third-party notices
+
+本包包含下列上游项目的官方 Windows x64 发行二进制，未由远联修改：
+
+1. Moonlight-qt 6.2.0
+   Copyright (C) Moonlight Game Streaming Project and contributors.
+   License: GNU General Public License version 3 (GPL-3.0).
+   Source tag: v6.2.0, commit de2467e433821664cdd2224aad8c89a625be1ad9.
+   https://github.com/moonlight-stream/moonlight-qt
+   License text: licenses/Moonlight-LICENSE.txt
+
+2. Sunshine 2026.914.233613
+   Copyright (C) LizardByte and contributors.
+   License: GNU General Public License version 3 (GPL-3.0).
+   Source tag: v2026.914.233613, commit 63d35f702ee9e362e43263742981836ec0710384.
+   https://github.com/LizardByte/Sunshine
+   License text: licenses/Sunshine-LICENSE.txt
+
+随 Moonlight 分发的 Qt 6 运行库：
+   Copyright (C) The Qt Company and contributors.
+   License: GNU Lesser General Public License version 3 (LGPL-3.0), as distributed
+   by upstream Moonlight. License text: licenses/LGPL-3.0.txt.
+
+随 Moonlight 分发的 FFmpeg 共享库（avcodec/avformat/avutil 等）与 SDL 2/3：
+   FFmpeg is licensed under LGPL-2.1-or-later in the upstream Moonlight build;
+   SDL is licensed under the zlib license. See the upstream Moonlight build and
+   source archive for the exact configuration and notices.
+
+Sunshine 还包含其上游工具和依赖；完整列表以 Sunshine 源码树中的 LICENSE 与
+第三方声明为准。
+
+GPL-3.0 全文：licenses/GPL-3.0.txt
+LGPL-3.0 全文：licenses/LGPL-3.0.txt
+源码获取：见 SOURCE-OFFER.txt
+
+远联项目政策：本质量预览仅面向社区、非商用。GPL-3.0 本身不禁止商业使用；任何商业
+发行/托管必须另行完成许可证、代码签名、安全审计和支持评估。

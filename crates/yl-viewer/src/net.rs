@@ -42,6 +42,7 @@ pub struct NetHandle {
 /// Starts the network thread. It performs the TLS handshake and waits for the
 /// Welcome message before any frames are forwarded.
 pub struct SessionAuth {
+    pub mode: String,
     pub ticket: Option<String>,
     pub nonce: String,
 }
@@ -138,6 +139,8 @@ async fn net_main(
         },
         session_ticket: auth.ticket,
         session_nonce: auth.nonce,
+        mode: auth.mode,
+        quality_certificate: String::new(),
     });
     write_message(&mut writer, &hello).await?;
 
@@ -218,7 +221,7 @@ async fn net_main(
             }
             message = in_rx.recv() => {
                 match message {
-                    Some(Ok(ServerMessage::Frame(frame))) => {
+                    Some(Ok(ServerMessage::Frame(frame) | ServerMessage::FlowFrame(frame))) => {
                         last_activity = Instant::now();
                         if events.send(NetEvent::Frame(frame)).is_err() {
                             break;
@@ -273,7 +276,7 @@ async fn net_main(
     Ok(())
 }
 
-fn client_config(fingerprint: [u8; 32]) -> Result<Arc<ClientConfig>> {
+pub(crate) fn client_config(fingerprint: [u8; 32]) -> Result<Arc<ClientConfig>> {
     let mut config = ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(PinnedVerifier { fingerprint }))

@@ -1,5 +1,49 @@
 # 需求追踪表
 
+## 2026-10-19 增量：0.3.0 Host 授权质量串流与流畅模式
+
+本节是最新状态，覆盖下面早期“未接入 Host / 非 tiles 拒签 / 流畅未实现”的记录；旧独立预览仍不受授权闭环保护。详见 [本轮实现和真实证据](evidence/quality-host-flow-2026-10-19.md)。
+
+| 需求 | 实现、环境和结果 | 剩余问题 |
+|---|---|---|
+| Moonlight 接入 Host 票据与撤权 | `yl-host/quality.rs`、`yl-runtime`、`yl-viewer/quality.rs`、Flutter `quality_broker_page.dart`；专用 Sunshine / 单次客户端证书 / 本机授权前置 / 权限交集 / 启动期与运行期看守 / Job 清理。真实 Flutter release 串流截图非空，上游浮层 1080p HEVC 接收/解码/渲染瞬时 60.06 fps；撤权端口消失 0.526 s、受管客户端退出检测 0.878 s | 仅 Windows IPv4 / 单会话 / Desktop / 外部窗口；仅查看本轮实测；键鼠、两机、公网、长稳等仍待验收 |
+| 模式协商与票据绑定 | 协议 v3、签名票据 v=2 增加 mode；`server` 支持 tiles/flow/quality，未知模式 409；真实错误模式与重放拒绝通过 | 0.2.0 不兼容，需三端一起升级；未部署生产 |
+| 流畅模式数据面 | `flow.rs` + Host writer：有界最新图块 / 代际渐进刷新 / 双向 pacing / 文件份额 / 控制优先 / 写阻塞调节 / TCP send buffer 16 KiB；2 KiB 文件块 | 应用预算目标约 1 Mbps，非重传计费硬上限；音频/QUIC/热切换/大目录分页未实现 |
+| flow 实际 Flutter 通路 | 真实 API 票据、固定指纹 TLS、FlowFrame、FrameQueue、Flutter JPEG codec，opt-in live test 1 passed；真实 25.01 s、1,001 图块、48,368 B/s、文件 SHA-256 一致、Ping p95 0.043 s；另轮 p95 1.05 s | 图块更新不等于整屏 FPS；未 Android 实体设备/弱网全矩阵 |
+| 构建与回归 | Rust workspace 31、Flutter 全套 73、最终响应式 18、WSL 独立 server 12；analyze/clippy 无问题；Host/viewer 与 Windows Flutter Release 成功，原生进程故障测试通过 | 未更新在线安装包 / Release / 签名；未扩大旧证据范围 |
+
+
+## 2026-10-19 后续增量：质量预览加固
+
+本节更新下方早期启动器记录，详见 [加固证据及剩余阻塞](evidence/quality-hardening-2026-10-19.md)。
+
+| 需求 | 实现与本轮验证 | 剩余问题 |
+|---|---|---|
+| 异常退出清理 | 原生 `quality_process.cpp` + `quality_native_process.dart`：创建时原子入 Job；真实父进程强杀、背压/超限、退出码/环境过滤测试通过 | 仅本地受管进程；不代表 Host 撤权 |
+| 运行时完整性 | `quality_integrity.dart` + 内置 Moonlight 6.2.0 清单：284 文件大小/哈希、额外文件/链接拒绝；单元及真实组件校验通过 | 不证明硬解；不能排除同用户校验后替换竞态 |
+| 应用列表查询 | `quality_apps.dart` + 质量页：真实 CLI CSV，取消/12 秒超时/64 KiB/256 条上限；解析/超时取消测试通过 | 配对仍在上游；未实测已配对 Host 查询 |
+| 安全打包 | 唯一私有 staging、清单验证、不覆盖最终包；真实打包、旧配置保留、重复拒绝测试通过 | 未发布新安装包/Release |
+| 控制面模式拒绝 | `server/src/main.rs` 非 tiles 409，能力 false；隔离真实 API 确认拒绝且没有票据入库 | Host broker、权限交集、租约和中心撤权未实现 |
+| 综合验证 | Dart analyze 无问题；Flutter 69 passed（含响应式）；Windows release 成功、首页/质量页实际渲染；WSL 独立 server fmt/clippy/test 12 passed/build 成功 | 未重跑串流/两机/性能；Android/Linux 质量未实现；未部署生产 |
+
+## 2026-10-19 增量：质量模式串流提示与启动器修复
+
+| 需求 | 状态 | 实现文件与本轮验证 | 剩余问题 |
+|---|---|---|---|
+| 明确质量模式使用串流 | 已实现并组件测试 | 首页/质量页/设置/帮助显式视频串流、独立窗口、请求/实际值和图块档区别；Windows/360dp/1.3 响应式通过 | 没有因此完成正式质量模式 |
+| 质量进程生命周期 | 已实现并自动化测试 | 新 `platform/quality_session.dart`：启动互斥、真实退出码、stdout/stderr 持续丢弃、只终止本页 Process、正常返回确认；竞态/失败/大输出/返回测试通过 | 父进程异常退出需 Job Object/监督器；不等于中心撤权；未实点完整串流流程 |
+| 配对入口与扩展参数 | 已实现并解析/组件测试 | 上游 GUI 配对/应用列表入口；720p、codec/decoder/window/overlay；Host 默认留空和 IP/DNS/IPv6/端口校验；真实固定 Moonlight 带参数 `--help` 退出 0 | 新参数下真实串流未重测；实际能力/首帧不可从远联读取；Android/Linux 未实现 |
+| 审查与验证 | 已完成本轮检查 | [审查报告](review/quality-streaming-review-2026-10-19.md)；Dart analyze 0 issue；Flutter 全套 58 passed，最终响应式 16 passed；ASCII 副本 Windows release 构建通过 | 首页实际截屏非空；质量页布局/返回为组件测试；未重跑两机/性能/安全 E2E，未替换安装包或发布 |
+
+## 2026-10-19 增量：Moonlight 质量档社区预览
+
+| 需求 | 状态 | 实现文件与测试环境/结果 | 剩余问题 |
+|---|---|---|---|
+| 使用 Moonlight 开源组件构建质量档 | **社区预览已实现并实测（外部进程）** | 上游 Moonlight-qt 6.2.0（GPL-3.0）+ Sunshine 2026.914.233613（GPL-3.0），固定 SHA-256；本机 Windows 11/RTX 5060 + 同机回环，1920x1080 60 fps HEVC、20 Mbps，官方性能浮层约 5 分钟稳定 60.05 fps，Host 处理延迟 1.7/4.6/2.0 ms，网络/抖动丢帧约 0.002%；证据 `docs/evidence/quality-preview-moonlight-2026-10-19.md` | 仅同机回环；未两物理机/跨 NAT/1440p/4K/10 分钟/音频/HDR/输入延迟；未嵌入 Flutter，未接入远联票据/撤权；不能称为完整/正式质量模式 |
+| 质量预览包与归属 | 已完成（作者环境打包） | `packaging/quality/build-quality-preview.ps1`、`README.zh-CN.md`、NOTICE、GPL/LGPL 全文、源码 offer；`dist/0.2.0/quality-preview/yuanlian-quality-preview-0.2.0-windows-x64.zip`（73 MB，解压约 198 MB），脚本拒绝运行期配对配置 | 未签名；仅 Windows x64；主安装器不含 GPL 二进制，需单独下载 |
+| 远联质量预览入口 | 已实现并本机 UI 实测 | `client/lib/src/ui/quality_preview_page.dart`、`client/lib/src/platform/quality_preview.dart`；自动检测、参数校验、detached 启动；`dart analyze` 0 issue，Flutter 48 测试通过（含 1280x800/360dp 响应式）；UI 点击启动子进程 PID 真实且 Responding=True；截图 `docs/evidence/assets/quality-preview-page.png` | 外部 Moonlight 的配对/授权/撤权/审计不在远联闭环；不能用于生产；Android/Linux 客户端无该入口 |
+| 安全声明 | 已在 UI/文档明确 | 页面写明不经过远联账号、短时票据、Host 本机确认、中心撤权；仅可信局域网、社区非商用；GPL 本身不禁止商用，商用需另评估 | 未来若要正式化，必须做嵌入式集成或进程级生命周期/撤权桥接，并重新做安全验收 |
+
 ## 2026-10-19 增量：Linux 控制服务端在线一键安装
 
 | 需求 | 状态 | 实现文件与测试环境/结果 | 剩余问题 |
@@ -18,7 +62,7 @@
 
 状态图例：**已实现并实测** / **已实现待实测** / **部分实现** / **未实现** / **平台不支持**。
 
-最后更新：2026-10-18（0.2.0 / 协议 v2）。此表是唯一事实来源；“代码存在”“构建通过”“单元测试通过”“本机 E2E”分别记录，不能互相替代。当前完成 **M0 Windows 引擎、阶段 B 账号/设备/配对/票据/Host 授权闭环、Flutter Windows/Android 客户端、基础文件传输、控制服务端与 0.2.0 安装产物**；仍不是完整产品。证据索引见 [阶段 B](evidence/b-auth-ticket-2026-10-18.md)、[打包](evidence/packaging-0.2.0.md)、[M0](evidence/m0-results.md)、[M1 Flutter](evidence/m1-flutter-client.md)、[Android](evidence/m1-android-client.md)、[文件](evidence/m2-file-transfer.md)、[平台 UI](evidence/m3-platform-ui.md)、[服务端](evidence/m4-control-server.md)。
+最后更新：2026-10-19（源码 0.3.0 / 协议 v3；发布资产仍为 0.2.0）。此表是唯一事实来源；“代码存在”“构建通过”“单元测试通过”“本机 E2E”分别记录，不能互相替代。当前完成 **M0 Windows 引擎、阶段 B 账号/设备/配对/票据/Host 授权闭环、Flutter Windows/Android 客户端、基础文件传输、控制服务端与 0.2.0 安装产物**；仍不是完整产品。证据索引见 [阶段 B](evidence/b-auth-ticket-2026-10-18.md)、[打包](evidence/packaging-0.2.0.md)、[M0](evidence/m0-results.md)、[M1 Flutter](evidence/m1-flutter-client.md)、[Android](evidence/m1-android-client.md)、[文件](evidence/m2-file-transfer.md)、[平台 UI](evidence/m3-platform-ui.md)、[服务端](evidence/m4-control-server.md)。
 
 ## 1. 平台与角色
 
@@ -39,17 +83,17 @@
 
 | 需求 | 状态 | 说明 |
 |---|---|---|
-| 质量模式（Moonlight + Sunshine） | 未实现 | 未集成；不得宣称可用 |
-| 兼顾模式（非视频图块、清晰文字、静止精修） | 部分实现 | 图块差分 + JPEG 85 + 600ms 后 JPEG 95 精修；无无损文字/滚动复用/块版本 TTL |
-| 流畅模式（1 Mbps 会话预算、低更新率） | 部分实现 | 静态不发图块；无总预算/拥塞控制/音频文件分账 |
-| 三模式切换、代际、回滚 | 未实现 | 仅单一 `tiles` |
+| 质量模式（Moonlight + Sunshine） | Windows 授权外部串流已实现并回环实测；未内嵌/两机验收 | 最新 v3 路径含 Host 票据/权限/撤权，截图瞬时 1080p60 HEVC，见 [本轮证据](evidence/quality-host-flow-2026-10-19.md)。旧独立预览仍不受该闭环保护；跨平台、两机、长稳、HDR/音频专项待测 |
+| 兼顾模式（非视频图块、清晰文字、静止精修） | 部分实现 | WGC 采集 + 并行图块编码；3200×2000 全屏动态 Host 管线 30 档约 33 fps、60 档约 54.7 fps；无无损文字/滚动复用/块版本 TTL | 60 档端到端未达 55 fps；无两台物理设备/10 分钟/1080p 源 |
+| 流畅模式（约 1 Mbps、低带宽渐进图块） | 已实现并隔离真实链路验证（现有图像/输入/文件通道） | 双向预算、文件份额、控制优先、背压/写阻塞调节、渐进代际刷新；音频/QUIC/弱网全矩阵待完成，见最新证据 |
+| 三模式选择、切换、代际、回滚 | 部分实现 | 连接时可选择 tiles/flow/quality，票据签名绑定模式；flow 代际已处理；会话内热切换/回滚未实现 |
 | 模式内部自动调节 | 未实现 | 固定 CLI 参数 |
 
 ## 3. 画面、输入与性能
 
 | 需求 | 状态 | 实现/证据 | 剩余问题 |
 |---|---|---|---|
-| 真实屏幕采集（非模拟） | 已实现并实测 | XCap/GDI；3200×2000 真实桌面 | 高 CPU；高安全窗口可能黑屏；未做 DXGI/WGC |
+| 真实屏幕采集（非模拟） | 已实现并实测 | WGC 主路径（windows-capture 2.0.1）、持久 GDI/XCap 回退；3200×2000 真实桌面 | WGC fallback/高安全窗口未做故障注入；GPU 成本未测 |
 | 硬件编码/解码 | 未实现 | — | 当前 JPEG |
 | 多显示器 | 部分实现 | 可选单显示器，坐标带原点 | 同屏多显/热插拔/负坐标未测 |
 | 混合 DPI/缩放 | 部分实现 | Host/Viewer Per-Monitor-V2；本机坐标 0 px 误差 | 混合 DPI 未测 |
@@ -64,7 +108,7 @@
 | Flutter 指针映射 | 已实现并实测 | 历史 0 误差；本轮未重测 | 真实按键/拖拽 E2E 未测 |
 | 画面边界/解码背压 | 已实现并测试 | 有界队列/像素/缓存上限；新代际必须全量；解码尺寸核对；损坏首帧不成功出画 | 慢解码长时间压力未实测 |
 | 界面页面 | 部分实现 | 连接/进度/工作区/文件/设置/账号与设备 | C01–C16 完整校验/空/失败/离线状态未全做 |
-| 采集/编码性能 | 已实测（本机） | 3200×2000 约 7–9 fps、采集 51–55 ms、编码 24–33 ms | 非 1080p/跨机/2 小时验收 |
+| 采集/编码性能 | 已实测（本机，短时） | WGC+并行编码：30 档 Host 管线约 33 fps、60 档约 54.7 fps；全屏动态 600 帧 | 60 档未达端到端门槛；非两机/10 分钟/1080p/输入延迟验收 |
 
 ## 4. 安全与身份
 
@@ -210,3 +254,17 @@
 | 会话生命周期/租约 | 已实现并 API/真实 Host 实测 | active/unknown/stale/revoking/ended；30 秒租约；Host 实例；开始确认先行；`docs/evidence/webui-r1-r6-2026-10-18.md` | 未做 2 小时/断网故障注入；服务端每 5 秒清理未压测 |
 | 待用票据撤权/R2/R4 | 已实现并隔离 API 实测 | `session_tickets`、`ticket_status`、按设备/用户绑定、撤销后幂等结束 | 未做高并发/时钟偏差专项 |
 | P2P / ICE / STUN / TURN / 中继 | 未实现 | WebUI 网络页与 API 明确 `p2p=false`、`turn=false`；无候选/数据通道/中继代码 | 依赖锁定、Flutter/Rust WebRTC 构建、DTLS 身份绑定、真实跨 NAT/TURN 环境；不能把路由或 STUN 查询当 P2P |
+
+## 14. 兼顾档 30/60 fps 本轮结果（2026-10-19）
+
+| 项目 | 状态 | 证据 | 判定 |
+|---|---|---|---|
+| WGC 采集后端 | 已实现并短时实测 | `crates/yl-host/src/wgc.rs`；3200×2000 3200×2000 全屏动态，WGC 源约 33/55 fps；GDI fallback 38 ms/帧 | 采集路径可用；未做 DXGI/GPU 成本/高安全窗口故障注入 |
+| 图块编码并行 | 已实现并测试 | `yl-tiles` rayon 哈希/JPEG；5 项测试；编码 p50 约 8–10 ms | 3200×2000 全屏也接近 60 管线 |
+| 30 档 Host 管线 | 已实现并短时实测 | 600 帧：平均 33.1 fps，18/18 个 1 秒窗口 ≥30 | 短时/loopback 达标；不是两机/10 分钟验收 |
+| 60 档 Host 管线 | 已实现未达标 | 600 帧：平均 54.7 fps，7/10 个 1 秒窗口 ≥55 | 失败，低于门槛 |
+| 30 档回环端到端 | 已实现并短时实测 | Host 33.0；查看器 presented 33.0–33.2，applied 32.5–32.9 | 短时 loopback 达标；不是两台物理设备验收 |
+| 60 档回环端到端 | 未达标 | Host 53.7–55.0；查看器 applied 50–55，presented 36.9–44.5 | 失败；同机 CPU 竞争，需两机复测 |
+| 10 分钟/95%/输入延迟/1080p/1440p | 未完成 | — | 缺环境/未测，不能宣称完整达标 |
+| 三档 UI/协商/回滚 | 未实现 | 仅 Host `--fps 30/60`（默认 30） | 未实现客户端请求/三档状态机 |
+| 数据量 | 已实测 | 3200×2000 全屏动态 30 档约 13 MiB/s；60 档约 18–20 MiB/s | 60 档超过 100 Mbps 基线，需更高带宽或用户可见降档 |

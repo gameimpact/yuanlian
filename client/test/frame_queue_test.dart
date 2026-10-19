@@ -42,16 +42,42 @@ FrameMessage _full(int seq, {int generation = 1}) {
     full: true,
     width: 16,
     height: 16,
-    tiles: [
-      _tile(0, 0),
-      _tile(8, 0),
-      _tile(0, 8),
-      _tile(8, 8),
-    ],
+    tiles: [_tile(0, 0), _tile(8, 0), _tile(0, 8), _tile(8, 8)],
   );
 }
 
 void main() {
+  test('progressive reset permits partial coverage only through its explicit marker', () {
+    final partial = FrameMessage(
+      seq: 1,
+      generation: 1,
+      full: true,
+      width: 16,
+      height: 16,
+      tiles: [_tile(0, 0)],
+      progressive: true,
+    );
+    expect(validateFrame(partial).isValid, true);
+    final queue = FrameQueue();
+    expect(
+      queue.offer(partial, validateFrame(partial), currentGeneration: -1),
+      true,
+    );
+    expect(queue.take()!.frame.progressive, true);
+    expect(
+      validateFrame(
+        FrameMessage(
+          seq: 1,
+          generation: 1,
+          full: true,
+          width: 16,
+          height: 16,
+          tiles: [_tile(0, 0)],
+        ),
+      ).isValid,
+      false,
+    );
+  });
   group('validateFrame', () {
     test('accepts a complete full frame', () {
       final validation = validateFrame(_full(1));
@@ -128,18 +154,27 @@ void main() {
     test('bounds the backlog and requests a full frame', () {
       final queue = FrameQueue(maxFrames: 2, maxBytes: 1024, maxPixels: 1024);
       expect(
-        queue.offer(_incremental(1), validateFrame(_incremental(1)),
-            currentGeneration: 1),
+        queue.offer(
+          _incremental(1),
+          validateFrame(_incremental(1)),
+          currentGeneration: 1,
+        ),
         isTrue,
       );
       expect(
-        queue.offer(_incremental(2), validateFrame(_incremental(2)),
-            currentGeneration: 1),
+        queue.offer(
+          _incremental(2),
+          validateFrame(_incremental(2)),
+          currentGeneration: 1,
+        ),
         isTrue,
       );
       expect(
-        queue.offer(_incremental(3), validateFrame(_incremental(3)),
-            currentGeneration: 1),
+        queue.offer(
+          _incremental(3),
+          validateFrame(_incremental(3)),
+          currentGeneration: 1,
+        ),
         isFalse,
       );
       expect(queue.length, 0);
@@ -148,8 +183,11 @@ void main() {
 
       // Incremental frames are refused until a full frame arrives.
       expect(
-        queue.offer(_incremental(4), validateFrame(_incremental(4)),
-            currentGeneration: 1),
+        queue.offer(
+          _incremental(4),
+          validateFrame(_incremental(4)),
+          currentGeneration: 1,
+        ),
         isFalse,
       );
       expect(
@@ -163,10 +201,16 @@ void main() {
 
     test('a newer full frame supersedes the backlog', () {
       final queue = FrameQueue(maxFrames: 4, maxBytes: 4096, maxPixels: 4096);
-      queue.offer(_incremental(1), validateFrame(_incremental(1)),
-          currentGeneration: 1);
-      queue.offer(_incremental(2), validateFrame(_incremental(2)),
-          currentGeneration: 1);
+      queue.offer(
+        _incremental(1),
+        validateFrame(_incremental(1)),
+        currentGeneration: 1,
+      );
+      queue.offer(
+        _incremental(2),
+        validateFrame(_incremental(2)),
+        currentGeneration: 1,
+      );
       expect(queue.length, 2);
       queue.offer(_full(3), validateFrame(_full(3)), currentGeneration: 1);
       expect(queue.length, 1);
@@ -175,11 +219,17 @@ void main() {
 
     test('rejects stale sequence numbers and partial new generations', () {
       final queue = FrameQueue();
-      queue.offer(_incremental(10), validateFrame(_incremental(10)),
-          currentGeneration: 1);
+      queue.offer(
+        _incremental(10),
+        validateFrame(_incremental(10)),
+        currentGeneration: 1,
+      );
       expect(
-        queue.offer(_incremental(9), validateFrame(_incremental(9)),
-            currentGeneration: 1),
+        queue.offer(
+          _incremental(9),
+          validateFrame(_incremental(9)),
+          currentGeneration: 1,
+        ),
         isFalse,
       );
       final newGeneration = _incremental(11, generation: 2);

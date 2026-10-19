@@ -1,8 +1,16 @@
-# 远联协议 v2（开发草案）
+# 远联协议 v3（0.3.0 开发增量）
 
-状态：与 `yl-proto` 0.2.0 实现一致。v2 在 v1 的图块画面/输入/文件基础上加入**账号签发的短时会话票据**、权限位、能力位和撤权语义。v1 客户端与 v2 Host 不兼容：Host 会以 `protocol_version` 明确拒绝，不会静默降级为匿名。
+2026-10-19：新增票据绑定的 `tiles` / `flow` / `quality` 模式，质量路径接入 Host 授权。旧外部社区预览入口仍独立、不受中心撤权；账号与设备页的“质量 · 视频串流 · Host 票据授权”才使用下面的 broker。画面仍在外部 Moonlight 显示，未内嵌 Flutter。
 
-`PROTOCOL_VERSION = 2`；`ALPN = yuanlian/1` 保持不变（ALPN 表示传输族，协议版本在 Hello/Welcome 中校验）。
+`PROTOCOL_VERSION = 3`；`ALPN = yuanlian/1`。Host、原生查看器、Flutter 和服务端源码版本升为 0.3.0；现有 0.2.0 发布资产不变，不能混装。v1/v2 Hello 布局不兼容并拒绝连接，旧布局无法解码时直接断开；不静默降级。
+
+HTTP `POST /api/v1/devices/{id}/session-ticket` 接受 `mode`（兼容 `engine` 别名，省略默认 `tiles`），未知模式返回 409。票据仍是 `yl1.<payload>.<signature>`，但 JSON `v=2` 并新增签名覆盖的 `mode` 字段；旧 v=1 票据不再接受。Host 在消耗防重放记录前校验 `claims.mode == hello.mode`。
+
+质量请求的 `quality_certificate` 仅包含本次 Moonlight 的公开 X.509 PEM。客户端用独立便携目录让官方 Moonlight 生成 RSA 身份；私钥留在主控端。Host 验票、权限交集、本机确认、控制面开始确认之后，才启动新的专用 Sunshine。该实例仅信任本次证书，只有 Desktop 应用；鼠标/键盘按实际权限启用，手柄/原生触控关闭，`lan_encryption_mode` / `wan_encryption_mode` 均为 2，WebUI 为随机不可交付凭据且只允许本机来源，不改现有 Sunshine 配置。
+
+实例启动期间也监测断开、撤权和过期；运行中每 100 ms 检查租约，每秒沿用控制面心跳。关闭本次实例的原生 kill-on-close Job 才是断开媒体和输入的执行手段，随后再报告结束。单会话、IPv4、仅 Windows；非 Windows、未配置 `--sunshine`、匿名质量或无查看权限均拒绝。
+
+服务端能力 API 声明三模式及 `quality_streaming.requires=host_v3_dedicated_sunshine`；这不代表每台已登记 Host 都已配置/支持质量，也不宣称 Flutter 内嵌或跨 NAT 可用。
 
 ## 1. 传输与信任边界
 
@@ -37,7 +45,7 @@ Viewer                     Control plane                 Host
 ```
 
 1. 查看者在登录后生成 32 字节随机 `session_nonce`（64 位小写十六进制），请求票据。服务端将 `sha256(nonce)` 写入票据。
-2. 票据格式：`yl1.<base64url(json claims)>.<base64url(ed25519 signature)>`；签名覆盖 `yl1.<payload>`。字段：`v,kid,aud,sub,user,jti,purpose,nonce_sha256,permissions,iat,exp`。
+2. 票据格式：`yl1.<base64url(json claims)>.<base64url(ed25519 signature)>`；签名覆盖 `yl1.<payload>`。字段：`v,kid,aud,sub,user,jti,purpose,mode,nonce_sha256,permissions,iat,exp`。
 3. Host 用启动时从 `/api/v1/server/ticket-key` 获取的公钥离线验签，校验 `aud==本机设备 ID`、`purpose=="remote_session"`、nonce 绑定、权限位、`iat/exp`（±90 秒时钟容差）。`kid` 未知时刷新一次公钥。
 4. Host 将 `jti` 放入有界防重放缓存；重复使用返回 `ticket_replay`。票据默认 1 小时有效。
 5. Host 计算 `effective = ticket.permissions & local_permissions`；`local_permissions` 来自 `--allow-input`、`--file-root`、`--file-read-only`。缺少 `view` 直接拒绝。
@@ -51,7 +59,7 @@ Viewer                     Control plane                 Host
 
 | 消息 | 字段 | 说明 |
 |---|---|---|
-| `Hello` | `protocol_version:u16`, `client_name:String`, `client_id:String`, `request_input:bool`, `features:u32`, `session_ticket:Option<String>`, `session_nonce:String` | 必须是第一条；`features` 位见 §3.3 |
+| `Hello` | `protocol_version:u16`, `client_name:String`, `client_id:String`, `request_input:bool`, `features:u32`, `session_ticket:Option<String>`, `session_nonce:String`, `mode:String`, `quality_certificate:String` | 必须是第一条；`features` 位见 §3.3 |
 | `Input(InputEvent)` | §4 | 未授权时返回 `input_denied` |
 | `RequestKeyframe` | 无 | 请求下一帧 `full=true` |
 | `Ping` | `nonce:u64` | 5 秒心跳 |
@@ -173,7 +181,18 @@ Host 将显示器内坐标加原点后换算为虚拟桌面绝对坐标。当前
 
 ## 7. 版本与兼容
 
-- v2 与 v1 不兼容；Host 在 `Hello` 阶段返回 `protocol_version`，不降级。
-- 原生查看器、Flutter 客户端和 Host 共用 `yl-proto` 0.2.0；任何字段布局变化必须提升 `PROTOCOL_VERSION` 并同步三端与本文档。
+- v3 与旧 v1/v2 布局不兼容并拒绝；旧布局解码失败时直接断开，不保证旧客户端获得错误码，不降级。
+- 原生查看器、Flutter 客户端和 Host 共用 `yl-proto` 0.3.0；任何字段布局变化必须提升 `PROTOCOL_VERSION` 并同步三端与本文档。
 - 票据 claims 使用独立 `v=1` 版本；`kid` 支持服务端轮换，Host 遇到未知 `kid` 刷新公钥。旧票据在 `exp` 前可验签，服务端轮换不会立即吊销已签发票据；需要立即失效时使用中心撤权。
 - 未知消息当前在查看器侧忽略（文件/能力扩展），Host 侧对未处理消息忽略；新增必选语义必须通过能力位确认，不能假设对端支持。
+
+## v3 新消息与流畅模式
+
+- `ServerMessage::QualityReady`（tag 12）：`port:u16, server_certificate:String, server_uuid:String, permissions:u32, input_allowed:bool`。仅在 quality 授权后发送。证书通过已固定指纹的 Host TLS 提供，客户端将其写入本次 Moonlight 的独立 host 条目；不能从此回执推断首帧或 FPS。质量控制连接仅接收 Ping/Bye，不能承载文件或绕过输入权限。
+- `ServerMessage::FlowFrame(FrameMessage)`（tag 13）：布局与 Frame 相同；在该独立消息中 `full=true` 表示清空画布开始渐进刷新，**不保证一条消息覆盖全屏**。只允许协商 flow 后接收。旧 `Frame` 的全量覆盖校验保持严格，不能用普通截断全量帧冒充渐进帧。
+- flow 使用 64px 图块、JPEG 40→60 静止精修，最多 5 次/秒采样；待发图块按坐标合并为最新内容并轮转发送，缓存受图块网格上限限制，输出帧队列 1 条。
+- 双向应用数据共用最高 100,000 B/s 的 pacing 预算，另留约 200 kbit/s 给 TLS/TCP/IP/ACK 开销，目标约 1 Mbps；这不是网卡计费硬上限，网络重传和控制面 API 流量需另算。文件份额最高 16,000 B/s 且不超过当前应用预算的 20%，flow 上传/下载使用 2 KiB 块。无音频通道，未假称音频已分账。
+- 控制消息优先；文件到期前继续发送画面，文件终态不会越过同任务数据。写阻塞超过 150 ms 时预算减半（最低 8,000 B/s），快速写入逐步恢复，上限不变；Host TCP send buffer 限为 16 KiB，单次写超时 5 秒后清理。TCP 仍存在队头阻塞，没有假称独立 QUIC 通道已完成。
+- 超过有界消息上限的目录结果明确返回错误，需重新以兼顾模式连接浏览；未静默截断目录。当前模式在连接时选择，尚无会话内热切换。
+
+最新实际证据见 [Host 适配与流畅模式](evidence/quality-host-flow-2026-10-19.md)。

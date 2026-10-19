@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../models/profile.dart';
 import '../models/session_auth.dart';
 import 'account_page.dart';
+import 'quality_broker_page.dart';
 import 'connection_progress_page.dart';
 import 'design_tokens.dart';
 import 'home_page.dart';
@@ -99,15 +100,27 @@ class _HomeShellState extends State<HomeShell> {
   }
 
   Future<void> _openConnection(ConnectionProfile profile) async {
+    if (profile.mode == 'quality' && widget.initialSessionAuth == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('质量串流需要账号签发的 quality 票据，请从账号与设备页连接')),
+      );
+      return;
+    }
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
-        builder: (_) => ConnectionProgressPage(
-          profile: profile,
-          sessionAuth: widget.initialSessionAuth,
-          onConnected: _remember,
-          inputSelfTest: widget.inputSelfTest,
-          autoOpenFiles: widget.autoOpenFiles,
-        ),
+        builder: (_) => profile.mode == 'quality'
+            ? QualityBrokerPage(
+                profile: profile,
+                auth: widget.initialSessionAuth!,
+                autoStart: true,
+              )
+            : ConnectionProgressPage(
+                profile: profile,
+                sessionAuth: widget.initialSessionAuth,
+                onConnected: _remember,
+                inputSelfTest: widget.inputSelfTest,
+                autoOpenFiles: widget.autoOpenFiles,
+              ),
       ),
     );
   }
@@ -126,9 +139,7 @@ class _HomeShellState extends State<HomeShell> {
   void _showUnavailable(String feature) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
-          '$feature需要服务端或文件专项能力，当前开发版尚未接入；不会用演示数据冒充。',
-        ),
+        content: Text('$feature需要服务端或文件专项能力，当前开发版尚未接入；不会用演示数据冒充。'),
         duration: const Duration(seconds: 3),
       ),
     );
@@ -146,9 +157,10 @@ class _HomeShellState extends State<HomeShell> {
             '· Windows/Android 客户端通过 TLS + SHA-256 指纹连接 Host；\n'
             '· 账号登录、设备目录、配对、短时票据与中心撤权已接入；Host 仍会本机确认；\n'
             '· 未登录的匿名直连必须由 Host 显式 --allow-anonymous，默认拒绝；\n'
-            '· 画面使用变化图块（Dart 合成），不是 Moonlight/Quality 模式；\n'
+            '· 画面使用变化图块（Dart 合成），不是原生纹理/Moonlight 视频；\n'
             '· 文件支持单文件上传/下载与 SHA-256 校验；\n'
-            '· MFA/恢复码、中继、质量模式、Linux、Android 被控 Host 未实现。\n\n'
+            '· 质量模式使用视频串流：账号与设备入口接入 Host 票据和撤权；独立社区预览不受该闭环保护；\n'
+            '· MFA/恢复码、中继、Linux、Android 被控 Host 未实现。\n\n'
             '不要把开发版 Host 暴露到公网。',
           ),
         ),
@@ -169,6 +181,7 @@ class _HomeShellState extends State<HomeShell> {
     }
     final isWindows = _usesWindowsShell(context);
     final home = HomePage(
+      onOpenAccount: () => _openPage(1),
       profiles: _profiles,
       onConnect: _openConnection,
       onRemove: _removeProfile,
@@ -222,10 +235,7 @@ class _HomeShellState extends State<HomeShell> {
                       Expanded(
                         child: Column(
                           children: [
-                            _WindowsCommandBar(
-                              title: title,
-                              onHelp: _showHelp,
-                            ),
+                            _WindowsCommandBar(title: title, onHelp: _showHelp),
                             Expanded(
                               child: IndexedStack(
                                 index: _selected,
@@ -304,11 +314,7 @@ class _WindowsSidebar extends StatelessWidget {
     final items = <_WindowsNavItem>[
       const _WindowsNavItem('连接', Icons.link_rounded, page: 0),
       const _WindowsNavItem('账号与设备', Icons.devices_other_rounded, page: 1),
-      const _WindowsNavItem(
-        '文件传输',
-        Icons.folder_open_rounded,
-        enabled: false,
-      ),
+      const _WindowsNavItem('文件传输', Icons.folder_open_rounded, enabled: false),
       const _WindowsNavItem('活动记录', Icons.history_rounded, enabled: false),
       const _WindowsNavItem('设置', Icons.settings_outlined, page: 2),
     ];
@@ -396,7 +402,7 @@ class _WindowsSidebar extends StatelessWidget {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'M0/M1 开发版 · 协议 v1',
+                        '阶段 B 开发版 · 协议 v3',
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
@@ -404,12 +410,8 @@ class _WindowsSidebar extends StatelessWidget {
                     ],
                   )
                 : const Tooltip(
-                    message: '直连模式 · M0/M1 开发版',
-                    child: Icon(
-                      Icons.circle,
-                      size: 8,
-                      color: YlStatus.success,
-                    ),
+                    message: '直连模式 · 阶段 B 开发版',
+                    child: Icon(Icons.circle, size: 8, color: YlStatus.success),
                   ),
           ),
         ],
@@ -451,8 +453,8 @@ class _WindowsNavTile extends StatelessWidget {
     final foreground = selected
         ? theme.colorScheme.primary
         : item.enabled
-            ? theme.colorScheme.onSurface
-            : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5);
+        ? theme.colorScheme.onSurface
+        : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5);
     final tile = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
       child: Material(
@@ -489,8 +491,9 @@ class _WindowsNavTile extends StatelessWidget {
                       item.label,
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: foreground,
-                        fontWeight:
-                            selected ? FontWeight.w600 : FontWeight.w400,
+                        fontWeight: selected
+                            ? FontWeight.w600
+                            : FontWeight.w400,
                       ),
                     ),
                   ),
@@ -498,8 +501,9 @@ class _WindowsNavTile extends StatelessWidget {
                     Text(
                       '未接入',
                       style: theme.textTheme.labelMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant
-                            .withValues(alpha: 0.55),
+                        color: theme.colorScheme.onSurfaceVariant.withValues(
+                          alpha: 0.55,
+                        ),
                         fontSize: 11,
                       ),
                     ),

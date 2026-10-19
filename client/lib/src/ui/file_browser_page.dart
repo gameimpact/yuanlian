@@ -486,7 +486,7 @@ class FileBrowserPageState extends State<FileBrowserPage> {
           return;
         }
         final remaining = task.total - offset;
-        final chunk = await reader.read(math.min(256 * 1024, remaining));
+        final chunk = await reader.read(math.min(widget.client.profile.mode == 'flow' ? 2 * 1024 : 256 * 1024, remaining));
         if (chunk.isEmpty) {
           break;
         }
