@@ -48,8 +48,8 @@
 
 | 需求 | 状态 | 实现文件与测试环境/结果 | 剩余问题 |
 |---|---|---|---|
-| `bash <(curl -fsSL …)` 在线安装、明确服务端角色 | 已发布并通过在线下载校验；待安装实测 | 根 `install.sh`；提交 `20298d4` 已推送 GitHub main；公开 raw 脚本与本地 SHA-256 一致；WSL 实际执行公开命令 `--check` 通过：GitHub v0.2.0 下载、SHA-256/目录结构/包内脚本语法校验；没有安装或修改系统服务 | systemd 完整安装/实机未执行；只支持 x86_64，新装入口拒绝覆盖已有部署；发布包仍为既有 v0.2.0 |
-| 离线安装命令与包内路径 | 已修复并做解包运行检查 | 三处说明使用 `scripts/install.sh`；包内安装器增加角色提示及完整性校验；本地 tar.gz 重打包，WSL 临时目录解包、脚本语法、真实二进制随机 loopback `/health` 通过；本地 manifest/SHA256SUMS 更新 | 没有替换 GitHub 已发布资产；在线脚本使用原有 v0.2.0 包与对应发布校验和；未操作 192.168.9.66 |
+| `bash <(curl -fsSL …)` 在线安装、明确服务端角色 | 已发布 0.3.0 并通过在线下载校验；待安装实测 | 根 `install.sh` 固定 v0.3.0；提交 `c1b7f6c`，标签 `v0.3.0`；公开 raw 脚本为 `.../v0.3.0/install.sh`；WSL Ubuntu 实际执行公开命令 `--check` 通过：GitHub v0.3.0 服务端包下载、SHA-256/目录结构/包内脚本语法校验；没有安装或修改系统服务。证据见 [一键安装验证](evidence/linux-oneclick-0.3.0-2026-10-19.md) | systemd 完整安装/实机未执行；只支持 x86_64，新装入口拒绝覆盖已有部署；桌面/Android 安装包仍为 v0.2.0 |
+| 离线安装命令与包内路径 | 已修复并做 0.3.0 解包运行检查 | 三处说明使用 `scripts/install.sh`；包内安装器增加角色提示及完整性校验；0.3.0 tar.gz 在 WSL 临时目录解包、脚本语法、真实二进制随机 loopback `/health` 与 `/api/v1/server/ticket-key` 通过；发布 SHA-256 `2527ccc5…` 写入 `SHA256SUMS.txt` | 未执行 systemd 完整安装；未操作 192.168.9.66；桌面/Android 安装包仍为 v0.2.0 |
 
 ## 2026-10-19 增量：未完成项源码复核与兼顾档新性能要求
 
@@ -62,7 +62,7 @@
 
 状态图例：**已实现并实测** / **已实现待实测** / **部分实现** / **未实现** / **平台不支持**。
 
-最后更新：2026-10-19（源码 0.3.0 / 协议 v3；发布资产仍为 0.2.0）。此表是唯一事实来源；“代码存在”“构建通过”“单元测试通过”“本机 E2E”分别记录，不能互相替代。当前完成 **M0 Windows 引擎、阶段 B 账号/设备/配对/票据/Host 授权闭环、Flutter Windows/Android 客户端、基础文件传输、控制服务端与 0.2.0 安装产物**；仍不是完整产品。证据索引见 [阶段 B](evidence/b-auth-ticket-2026-10-18.md)、[打包](evidence/packaging-0.2.0.md)、[M0](evidence/m0-results.md)、[M1 Flutter](evidence/m1-flutter-client.md)、[Android](evidence/m1-android-client.md)、[文件](evidence/m2-file-transfer.md)、[平台 UI](evidence/m3-platform-ui.md)、[服务端](evidence/m4-control-server.md)。
+最后更新：2026-10-19（源码 0.3.0 / 协议 v3；Linux 服务端 0.3.0 已发布，Windows/Android/Linux 桌面安装资产仍为 0.2.0）。此表是唯一事实来源；“代码存在”“构建通过”“单元测试通过”“本机 E2E”分别记录，不能互相替代。当前完成 **M0 Windows 引擎、阶段 B 账号/设备/配对/票据/Host 授权闭环、Flutter Windows/Android 客户端、基础文件传输、控制服务端、0.3.0 Linux 服务端一键安装与 0.2.0 桌面/Android 安装产物**；仍不是完整产品。证据索引见 [阶段 B](evidence/b-auth-ticket-2026-10-18.md)、[打包](evidence/packaging-0.2.0.md)、[M0](evidence/m0-results.md)、[M1 Flutter](evidence/m1-flutter-client.md)、[Android](evidence/m1-android-client.md)、[文件](evidence/m2-file-transfer.md)、[平台 UI](evidence/m3-platform-ui.md)、[服务端](evidence/m4-control-server.md)、[Linux 一键安装](evidence/linux-oneclick-0.3.0-2026-10-19.md)。
 
 ## 1. 平台与角色
 
